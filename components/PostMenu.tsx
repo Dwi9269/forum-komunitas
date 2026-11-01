@@ -116,10 +116,19 @@ export default function PostMenu({
   return (
     <div
       ref={akarRef}
-      // Cegah navigasi ketika menu berada di dalam Link kartu post.
+      data-post-menu-root=""
+      // Cegah navigasi ketika menu berada di dalam Link kartu post. PENTING:
+      // hanya untuk klik yang DOM-nya di dalam pembungkus ini (pemicu + popup
+      // menu). Konten ReportDialog dirender via portal ke document.body —
+      // event React-nya TETAP naik lewat pohon komponen sampai ke sini, tapi
+      // DOM-nya tidak; preventDefault tanpa syarat akan membatalkan aksi
+      // bawaan klik dialog (radio alasan & submit form).
       onClick={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
+        const sumber = e.target as HTMLElement | null;
+        if (sumber && sumber.closest("[data-post-menu-root]")) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
       }}
       className="relative inline-flex shrink-0"
     >
