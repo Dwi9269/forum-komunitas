@@ -106,16 +106,23 @@ function failure(err: AppError): { ok: false; code: ErrorCode; message: string }
   return { ok: false, code: err.code, message: err.message };
 }
 
-/** Verifikasi komunitas ada (tabel communities boleh dibaca authenticated). */
-async function communityExists(
+/**
+ * Selesaikan komunitas dari id ATAU slug → id kanonik (uuid). Pemanggil UI
+ * mengirim slug; pemanggil lain boleh mengirim id. Keduanya diterima agar
+ * tidak ada lagi mismatch bentuk argumen.
+ */
+async function resolveCommunity(
   supabase: SupabaseClient,
-  id: string,
-): Promise<{ ok: true } | { ok: false; error: AppError }> {
+  idAtauSlug: string,
+): Promise<{ ok: true; id: string } | { ok: false; error: AppError }> {
   try {
+    const key = idAtauSlug.trim();
+    const isUuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(key);
     const { data, error } = await supabase
       .from("communities")
       .select("id")
-      .eq("id", id)
+      .eq(isUuid ? "id" : "slug", key)
       .maybeSingle();
     if (error) {
       return { ok: false, error: extractErrorCode(error) };
@@ -123,7 +130,7 @@ async function communityExists(
     if (!data) {
       return { ok: false, error: appError("NOT_FOUND") };
     }
-    return { ok: true };
+    return { ok: true, id: (data as { id: string }).id };
   } catch (e) {
     return { ok: false, error: extractErrorCode(e) };
   }
@@ -266,16 +273,16 @@ export async function joinCommunity(
     }
     const supabase = await createClient();
 
-    const exists = await communityExists(supabase, id);
-    if (!exists.ok) {
-      return failure(exists.error);
+    const resolved = await resolveCommunity(supabase, id);
+    if (!resolved.ok) {
+      return failure(resolved.error);
     }
 
     // RLS members_join: user_id = auth.uid() dan is_active_user() — akun
     // suspended ditolak di sini (RLS_DENIED, PRD 20 kasus tepi 2).
     const { error } = await supabase
       .from("community_members")
-      .insert({ community_id: id, user_id: user.id });
+      .insert({ community_id: resolved.id, user_id: user.id });
     if (error) {
       // 23505 (PK community_members) = sudah jadi anggota → idempoten, sukses.
       if ((error as { code?: string }).code === "23505") {
@@ -304,9 +311,9 @@ export async function leaveCommunity(
     }
     const supabase = await createClient();
 
-    const exists = await communityExists(supabase, id);
-    if (!exists.ok) {
-      return failure(exists.error);
+    const resolved = await resolveCommunity(supabase, id);
+    if (!resolved.ok) {
+      return failure(resolved.error);
     }
 
     // RLS members_leave: hanya baris sendiri. Bukan anggota → count 0 →
@@ -314,7 +321,7 @@ export async function leaveCommunity(
     const { error } = await supabase
       .from("community_members")
       .delete()
-      .eq("community_id", id)
+      .eq("community_id", resolved.id)
       .eq("user_id", user.id);
     if (error) {
       return failure(extractErrorCode(error));

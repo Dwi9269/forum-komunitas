@@ -124,8 +124,11 @@ export async function register(formData: FormData): Promise<RegisterResult> {
   const email = readField(formData, "email").trim();
   const password = readField(formData, "password");
   const username = readField(formData, "username").trim();
+  // Form mengirim field "undangan"; kontrak aksi menyebut "invite_code" —
+  // terima keduanya agar tidak ada lagi mismatch nama field.
+  const inviteRaw = readField(formData, "invite_code") || readField(formData, "undangan");
   // Trigger menormalkan upper(trim(...)) — samakan di sini agar konsisten.
-  const inviteCode = readField(formData, "invite_code").trim().toUpperCase();
+  const inviteCode = (inviteRaw ?? "").trim().toUpperCase();
 
   // Validasi cepat di app (PRD 21); database memvalidasi ulang di trigger.
   if (!EMAIL_PATTERN.test(email)) {
