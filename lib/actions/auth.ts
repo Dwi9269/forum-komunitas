@@ -104,10 +104,10 @@ const PASSWORD_MIN = 8;
 
 /**
  * Path halaman "buat password baru" (PRD 19). Tautan reset dikirim dengan
- * redirectTo = NEXT_PUBLIC_SITE_URL + path ini; FRONTEND-AGENT menyediakan
- * halaman di app/reset-password yang memanggil updatePassword().
+ * redirectTo = NEXT_PUBLIC_SITE_URL + path ini; halamannya adalah
+ * app/(auth)/reset/confirm yang memanggil updatePassword().
  */
-const RESET_PASSWORD_PATH = "/reset-password";
+const RESET_PASSWORD_PATH = "/reset/confirm";
 
 /** Pesan netral reset password — tidak membocorkan keberadaan email (PRD 19). */
 const PASSWORD_RESET_SENT_MESSAGE =

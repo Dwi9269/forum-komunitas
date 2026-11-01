@@ -111,7 +111,15 @@ function bacaKomunitas(raw: unknown): { slug: string | null; name: string | null
 
 function bacaPenulis(raw: unknown): { name: string | null; anonim: boolean } {
   const flagAnonim = baca(raw, ["isAnonymous", "is_anonymous", "anonim"]) === true;
-  const penulis = baca(raw, ["author", "username", "authorName", "penulis"]);
+  // author_username = kolom persis posts_feed/comments_view (snake_case).
+  const penulis = baca(raw, [
+    "author",
+    "username",
+    "authorName",
+    "authorUsername",
+    "author_username",
+    "penulis",
+  ]);
   if (typeof penulis === "string") return { name: penulis, anonim: flagAnonim };
   const rekam = asRekam(penulis);
   if (rekam) {

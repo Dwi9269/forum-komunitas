@@ -4,7 +4,9 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/ui/Button";
 import Card from "@/components/ui/Card";
+import Input from "@/components/ui/Input";
 import ImagePicker from "@/components/ImagePicker";
+import { updatePassword, requestPasswordReset } from "@/lib/actions/auth";
 import { updateProfile } from "@/lib/actions/profiles";
 import { uploadAvatar } from "@/lib/image/upload";
 import { isFotoError } from "@/lib/image/compress";
@@ -35,12 +37,15 @@ function pesanGagalFoto(error: unknown): string {
 
 export interface SettingsFormProps {
   username: string;
+  /** Email akun (untuk kirim tautan ganti sandi). */
+  email: string;
   initialBio: string;
   initialAvatarUrl: string | null;
 }
 
 export default function SettingsForm({
   username,
+  email,
   initialBio,
   initialAvatarUrl,
 }: SettingsFormProps) {
@@ -53,6 +58,14 @@ export default function SettingsForm({
   const [error, setError] = useState<string | null>(null);
   const [pesan, setPesan] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+
+  // Ganti sandi: langsung via sesi aktif, atau tautan email (ala OTP).
+  const [sandiBaru, setSandiBaru] = useState("");
+  const [sandiUlang, setSandiUlang] = useState("");
+  const [errorSandi, setErrorSandi] = useState<string | null>(null);
+  const [pesanSandi, setPesanSandi] = useState<string | null>(null);
+  const [pendingSandi, startTransitionSandi] = useTransition();
+  const [pendingTautan, startTransitionTautan] = useTransition();
 
   const files = avatarFile ? [avatarFile] : [];
   const tersimpan = pesan !== null;
@@ -135,6 +148,64 @@ export default function SettingsForm({
         router.refresh();
       } catch (err) {
         setError(extractErrorCode(err).message);
+      }
+    });
+  }
+
+  /** Ubah sandi langsung — sesi aktif (Supabase updateUser, tanpa email). */
+  function ubahSandi() {
+    setErrorSandi(null);
+    setPesanSandi(null);
+    if (sandiBaru.length < 8) {
+      setErrorSandi("Sandi minimal 8 karakter.");
+      return;
+    }
+    if (sandiBaru !== sandiUlang) {
+      setErrorSandi("Konfirmasi sandi tidak sama.");
+      return;
+    }
+    const data = new FormData();
+    data.set("password", sandiBaru);
+    data.set("confirm_password", sandiUlang);
+    startTransitionSandi(async () => {
+      try {
+        const hasil: unknown = await updatePassword(data);
+        const gagal = pesanGagalHasil(hasil);
+        if (gagal) {
+          setErrorSandi(gagal);
+          return;
+        }
+        setPesanSandi("Sandi berhasil diganti.");
+        setSandiBaru("");
+        setSandiUlang("");
+      } catch (err) {
+        setErrorSandi(extractErrorCode(err).message);
+      }
+    });
+  }
+
+  /** Kirim tautan ganti sandi ke email — alur konfirmasi email (ala OTP). */
+  function kirimTautanSandi() {
+    setErrorSandi(null);
+    setPesanSandi(null);
+    const data = new FormData();
+    data.set("email", email);
+    startTransitionTautan(async () => {
+      try {
+        const hasil: unknown = await requestPasswordReset(data);
+        const gagal = pesanGagalHasil(hasil);
+        if (gagal) {
+          setErrorSandi(gagal);
+          return;
+        }
+        const pesanServer =
+          (hasil as { message?: string }).message ??
+          "Tautan ganti sandi sudah dikirim.";
+        setPesanSandi(
+          `${pesanServer} Buka tautannya di email (${email}) untuk membuat sandi baru — cek folder spam juga.`,
+        );
+      } catch (err) {
+        setErrorSandi(extractErrorCode(err).message);
       }
     });
   }
@@ -225,6 +296,90 @@ export default function SettingsForm({
       >
         Simpan
       </Button>
+
+      {/* Ganti sandi (PRD 6): langsung lewat sesi aktif, atau tautan email. */}
+      <div className="flex flex-col gap-3 border-t border-border pt-5">
+        <div>
+          <h2 className="text-sm font-semibold text-foreground">Ganti sandi</h2>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Minimal 8 karakter. Bila lupa sandi sekarang, pakai jalur tautan
+            email di bawah.
+          </p>
+        </div>
+
+        {errorSandi && (
+          <div
+            role="alert"
+            className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2.5 text-sm text-danger"
+          >
+            {errorSandi}
+          </div>
+        )}
+        {pesanSandi && (
+          <div
+            role="status"
+            className="rounded-lg border border-primary/40 bg-primary/10 px-3 py-2.5 text-sm text-primary"
+          >
+            {pesanSandi}
+          </div>
+        )}
+
+        <Input
+          label="Sandi baru"
+          name="sandi-baru"
+          type="password"
+          autoComplete="new-password"
+          placeholder="Minimal 8 karakter"
+          value={sandiBaru}
+          onChange={(e) => {
+            setSandiBaru(e.target.value);
+            setPesanSandi(null);
+          }}
+          disabled={pendingSandi || pendingTautan}
+        />
+        <Input
+          label="Ulangi sandi baru"
+          name="sandi-baru-ulang"
+          type="password"
+          autoComplete="new-password"
+          placeholder="Ulangi sandi baru"
+          value={sandiUlang}
+          onChange={(e) => setSandiUlang(e.target.value)}
+          disabled={pendingSandi || pendingTautan}
+        />
+        <Button
+          onClick={ubahSandi}
+          size="md"
+          loading={pendingSandi}
+          disabled={pendingSandi || pendingTautan || mengunggah}
+          className="self-end"
+        >
+          Ubah sandi sekarang
+        </Button>
+
+        <div
+          className="flex items-center gap-2 text-xs text-muted-foreground"
+          aria-hidden="true"
+        >
+          <span className="h-px flex-1 bg-border" />
+          <span>atau</span>
+          <span className="h-px flex-1 bg-border" />
+        </div>
+
+        <Button
+          variant="secondary"
+          onClick={kirimTautanSandi}
+          loading={pendingTautan}
+          disabled={pendingSandi || pendingTautan}
+        >
+          Kirim tautan ganti sandi ke email
+        </Button>
+        <p className="text-xs text-muted-foreground">
+          Tautan dikirim ke{" "}
+          <span className="font-medium">{email || "email akunmu"}</span> — buka
+          tautannya untuk membuat sandi baru, seperti kode OTP lewat email.
+        </p>
+      </div>
     </Card>
   );
 }
