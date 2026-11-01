@@ -163,8 +163,10 @@ export function toFeedPosts(hasil: unknown): FeedPostView[] {
   const dalam = asRekam(rekam.data) ?? asRekam(rekam.items) ?? rekam;
   const kandidat =
     (Array.isArray(rekam.items) && rekam.items) ||
+    (Array.isArray(rekam.posts) && rekam.posts) ||
     (Array.isArray(rekam.data) && rekam.data) ||
     (Array.isArray(dalam.items) && dalam.items) ||
+    (Array.isArray(dalam.posts) && dalam.posts) ||
     (Array.isArray(dalam.data) && dalam.data);
   return Array.isArray(kandidat) ? kandidat.map(toFeedPostView) : [];
 }
@@ -388,8 +390,10 @@ export function toCommunityViews(hasil: unknown): CommunityView[] {
   const dalam = asRekam(rekam.data) ?? asRekam(rekam.items) ?? rekam;
   const kandidat =
     (Array.isArray(rekam.items) && rekam.items) ||
+    (Array.isArray(rekam.communities) && rekam.communities) ||
     (Array.isArray(rekam.data) && rekam.data) ||
     (Array.isArray(dalam.items) && dalam.items) ||
+    (Array.isArray(dalam.communities) && dalam.communities) ||
     (Array.isArray(dalam.data) && dalam.data);
   return Array.isArray(kandidat) ? kandidat.map((r) => toCommunityView(r)) : [];
 }

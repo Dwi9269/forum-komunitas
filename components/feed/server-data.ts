@@ -29,10 +29,40 @@ export type HasilAman<T> =
   | { ok: true; data: T }
   | { ok: false; message: string; code: string };
 
-/** Jalankan fungsi async; error apa pun (env/RLS/jaringan) menjadi pesan ramah. */
-async function aman<T>(jalankan: () => Promise<T>): Promise<HasilAman<T>> {
+/** Lepas amplop ActionResult bila fungsi sudah mengembalikan { ok, data }. */
+type AmbilData<T> =
+  T extends { ok: true; data: infer D }
+    ? D
+    : T extends { ok: false }
+      ? never
+      : T;
+
+/**
+ * Jalankan fungsi async; error apa pun (env/RLS/jaringan) menjadi pesan ramah.
+ * Aksi lib/actions umumnya SUDAH mengembalikan amplop { ok, data } — hasil itu
+ * dibuka sekali di sini agar pemanggil selalu melihat data mentahnya; nilai
+ * polos (bukan amplop) tetap dibungkus sebagai sukses. Tanpa pembukaan ini,
+ * pesan gagal aksi tidak pernah sampai ke UI dan normalizer salah baca bentuk.
+ */
+export async function aman<T>(
+  jalankan: () => Promise<T>
+): Promise<HasilAman<AmbilData<T>>> {
   try {
-    return { ok: true, data: await jalankan() };
+    const hasil = await jalankan();
+    if (hasil !== null && typeof hasil === "object" && "ok" in hasil) {
+      const amplop = hasil as { ok: boolean; message?: string; code?: string; data?: unknown };
+      if (amplop.ok && "data" in amplop) {
+        return { ok: true, data: amplop.data as AmbilData<T> };
+      }
+      if (!amplop.ok) {
+        return {
+          ok: false,
+          message: amplop.message ?? "Terjadi kesalahan. Coba lagi.",
+          code: String(amplop.code ?? "UNKNOWN"),
+        };
+      }
+    }
+    return { ok: true, data: hasil as AmbilData<T> };
   } catch (error) {
     const dipetakan = extractErrorCode(error);
     return { ok: false, message: dipetakan.message, code: dipetakan.code };

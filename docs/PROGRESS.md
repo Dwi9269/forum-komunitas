@@ -4,30 +4,30 @@ Diupdate oleh ORCHESTRATOR. Sumber kebenaran fitur: `docs/PRD.md`.
 
 ## Checklist fase
 
-- [x] Fase 1: Fondasi — **Gerbang 1 LULUS** (migrasi live + uji RLS 17/17)
-- [x] Fase 2: Akun — kode selesai; alur siap diuji user di localhost
-- [x] Fase 3: Inti forum — kode selesai; alur siap diuji user di localhost
-- [ ] Fase 4: Foto dan moderasi — berikutnya (butuh: view statistik komunitas, aksi lapor/admin, upload foto)
-- [ ] Fase 5: Audit independen (QA)
-- [ ] Fase 6: Rilis (DevOps) — target user: hosting di domain chatasiquqe (my.id/web.id/biz.id) via Vercel
+- [x] Fase 1: Fondasi — Gerbang 1 LULUS (migrasi live + uji RLS 17/17)
+- [x] Fase 2: Akun — selesai
+- [x] Fase 3: Inti forum — selesai
+- [x] Fase 4: Foto dan moderasi — selesai (migrasi 0005 live)
+- [x] Fase 5: Audit QA — **Gerbang 5 LULUS (bersyarat)**: 0 temuan Tinggi; semua temuan Sedang diperbaiki & lulus uji ulang; 6 temuan Rendah sengaja terbuka (tidak memblokir); syarat tersisa = uji manual M1-M12 oleh user (daftar di `docs/QA_REPORT.md`)
+- [ ] Fase 6: Rilis (DevOps) — **berikutnya, dikerjakan bersama user**: deploy Vercel + domain chatasiquqe + SMTP + cron
 
 ## Status infrastruktur
 
-- Supabase live: `irmmdnipacvrcoospjcp` (region ap-northeast-2/Seoul, tier gratis). 4 migrasi diterapkan (tracked di `private.app_migrations`). Uji RLS **17 OK / 0 GAGAL**.
-- Kredensial lengkap di `.env.local` (tidak di-commit): URL, publishable key, secret key, CRON_SECRET terisi; `NEXT_PUBLIC_SITE_URL` masih localhost (ganti saat deploy).
-- 5 komunitas awal ter-seed: umum, curhat, jual-beli, teknologi, hobi. Pendaftar pertama otomatis admin tanpa kode undangan.
+- Supabase live: `irmmdnipacvrcoospjcp` (ap-northeast-2). Migrasi 0001-0005 diterapkan (tracked `private.app_migrations`). Uji RLS **17 OK / 0 GAGAL**.
+- Kredensial lengkap di `.env.local` (tidak di-commit). `NEXT_PUBLIC_SITE_URL` masih localhost → ganti saat deploy.
+- Build produksi: LULUS (17 rute: feed, komunitas, detail, submit, auth 4, admin 5, settings, profil, rules).
 
-## Perbaikan integrasi oleh ORCHESTRATOR
+## Fitur yang ada (ringkas)
 
-1. Kontrak antar agent Fase 3: `content`→`body` (CommentForm, SubmitPostForm), `setVote({...})`→`setVotePost(id, value)`, `getCommunity`→`getCommunityBySlug`.
-2. Harness uji RLS: SETUP dibungkus `BEGIN..COMMIT` eksplisit (satu query string = satu transaksi implisit; ROLLBACK skenario pertama ikut membatalkan SETUP — gejala palsu S6/S8) + promosi `rls_mod` jadi moderator. Database sendiri sehat.
+Akun: register kode undangan (akun pertama = admin), login, lupa password, banner suspend/ban. Forum: feed komunitas diikuti (tamu = CTA), komunitas + jumlah anggota, post (teks + maks 4 foto terkompresi <1 MB, anonim), komentar bertingkat + vote komentar, vote post optimis, menu lapor/hapus. Admin: antrean laporan (thumbnail diburamkan), kelola pengguna (suspend/blokir), kode undangan, komunitas, log. Profil /u/[username], /settings (bio+avatar), /rules.
 
 ## Hambatan terbuka
 
-- Node 18 → warning deprecation @supabase/supabase-js; upgrade ke 20+ disarankan sebelum rilis.
-- Domain hosting: rekomendasi chatasiquqe.my.id (OPEN_QUESTIONS no. 8). Perlu akun Vercel (+ repo GitHub atau deploy CLI).
-- SMTP bawaan Supabase terbatas — sambungkan SMTP (PRD 23.3) sebelum mengundang pengguna banyak.
+- Uji manual M1-M12 (QA_REPORT.md) — terutama M1 alur akun, M3 anonim tak terbongkar, M4 auto-hide 3 laporan, M8 foto dari HP.
+- Deploy: perlu akun GitHub + Vercel dari user; DNS chatasiquqe.my.id; SMTP (PRD 23.3); `NEXT_PUBLIC_SITE_URL` + Redirect URLs Supabase saat domain aktif.
+- Node 18 → warning deprecation; upgrade ke 20+ disarankan sebelum rilis.
+- Temuan QA Rendah R-6/7/8/9/11/12 terbuka (tidak memblokir; detail di QA_REPORT.md).
 
 ## Catatan sesi
 
-- 2026-11-01: Fase 1-3 dikode (5 gelombang agent paralel, build lulus). Gerbang 1 selesai penuh: migrasi live + 17/17 uji RLS. Handoff semua fase di HANDOFF.md. Dev server berjalan di background (jangan jalankan `next build` dan `next dev` bersamaan — konflik `.next`). Migrasi/uji ulang: `set "SUPA_DB_PASSWORD=..." && node scripts/run-migrations.mjs --tests`.
+- 2026-11-01: Fase 1-5 selesai dalam satu sesi (8 gelombang agent; batas konkurensi 3 agent paralel). Handoff semua fase di HANDOFF.md; audit di QA_REPORT.md. Dev server berjalan di background (jangan jalankan `next build` dan `next dev` bersamaan). Migrasi/uji ulang: `set "SUPA_DB_PASSWORD=..." && node scripts/run-migrations.mjs --tests`.

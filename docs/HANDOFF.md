@@ -870,3 +870,8 @@ Format entri per skill `forum-multi-agent-builder` bagian 5. Selama fase berjala
   5. /u/[username] — header avatar+username (+bio di profil sendiri, tombol "Ubah profil"), feed milik pengguna, kosong → "Belum ada postingan"; BottomNav "Profil" mendarat di sini.
   6. /settings — tamu dialihkan /login; pilih avatar → pratinjau seketika + "Mengunggah avatar..."; bio 201 karakter dicegah (counter n/200); Simpan → "Tersimpan" dan avatar di header ikut berganti (router.refresh); hapus avatar → Simpan → header kembali ke inisial.
   7. Banner suspend (akun disuspend) → tautan "Baca aturan" mendarat di /rules berisi 8 butir aturan PRD 28.1.
+  
+## [HOTFIX 2026-11-02] ORCHESTRATOR - 
+- Bug dari uji manual user: dropdown komunitas kosong di /submit dan feed beranda selalu kosong walau ada post.  
+- Akar: aman di components/feed/server-data.ts tidak membuka amplop ActionResult sehingga normalizer salah baca bentuk; toFeedPosts/toCommunityViews tidak mengenali kunci posts/communities dari kontrak BACKEND. Ada sejak Fase 3, tampak setelah database live. Perbaikan serupa sudah diterapkan lebih dulu di components/admin/server-data.ts.  
+- Fix: unwrap cerdas di aman + normalizer mengenali kunci posts/communities; build lulus; user perlu menguji ulang alur posting.  
