@@ -37,6 +37,11 @@ export interface FeedListProps {
   username?: string;
   /** Urutan feed (PRD 4.3): new = Terbaru, hot = Populer. */
   sort?: "new" | "hot";
+  /**
+   * Hanya komunitas yang diikuti (PRD 18.2.1) — dikirim ulang pada pagination
+   * "Muat lagi" agar halaman berikutnya konsisten dengan halaman pertama.
+   */
+  onlyJoined?: boolean;
   emptyTitle?: string;
   emptyDescription?: string;
   /** Tampilkan badge komunitas pada kartu. */
@@ -50,6 +55,7 @@ export default function FeedList({
   communitySlug,
   username,
   sort = "new",
+  onlyJoined,
   emptyTitle = "Belum ada postingan",
   emptyDescription = "Jadilah yang pertama membagikan sesuatu!",
   showCommunity = true,
@@ -66,11 +72,14 @@ export default function FeedList({
     try {
       // Argumen lewat variabel (bukan literal) agar properti tambahan `sort`
       // tidak ditolak TypeScript bila tipe param backend belum memilikinya.
+      // onlyJoined ikut dikirim ulang (PRD 18.2.1) agar pagination tetap
+      // hanya komunitas yang diikuti.
       const args = {
         cursor: dariCursor ?? undefined,
         communitySlug,
         username,
         sort,
+        onlyJoined,
       };
       const hasil: unknown = await getFeed(args);
 

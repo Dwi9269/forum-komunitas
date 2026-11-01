@@ -49,6 +49,11 @@ export interface SessionProfile {
   suspendedUntil: string | null;
   avatarUrl: string | null;
   bio: string | null;
+  /**
+   * ISO timestamp pembuatan akun (profiles.created_at) — dipakai gate foto
+   * akun < 24 jam (PRD 4.7 / 18.3.10). null bila profil gagal dibaca.
+   */
+  createdAt: string | null;
 }
 
 /** Bentuk gagal yang konsisten untuk semua aksi auth. */
@@ -285,7 +290,9 @@ export async function updatePassword(
 
 /**
  * Ambil user sesi + baris profilnya. Dipakai halaman server/layout untuk
- * banner status (suspended/banned, PRD 18.1.6-7) dan info profil.
+ * banner status (suspended/banned, PRD 18.1.6-7), info profil, dan gate
+ * foto akun < 24 jam lewat createdAt (PRD 4.7 / 18.3.10 — dipakai
+ * getImageUploadGate di lib/actions/images.ts).
  * Bila tidak login, atau profil belum terbaca, status dianggap aman.
  * Tidak pernah melempar error — selalu SessionProfile | null.
  */
@@ -311,6 +318,7 @@ interface ProfileRow {
   suspended_until: string | null;
   avatar_url: string | null;
   bio: string | null;
+  created_at: string | null;
 }
 
 /** Baca satu kolom FormData sebagai string ("" bila bukan string/kosong). */
@@ -351,7 +359,7 @@ async function fetchProfileRow(
   try {
     const { data } = await supabase
       .from("profiles")
-      .select("username, role, status, suspended_until, avatar_url, bio")
+      .select("username, role, status, suspended_until, avatar_url, bio, created_at")
       .eq("id", userId)
       .maybeSingle();
     return (data as ProfileRow | null) ?? null;
@@ -389,6 +397,7 @@ function toSessionProfile(
     suspendedUntil: profile?.suspended_until ?? null,
     avatarUrl: profile?.avatar_url ?? null,
     bio: profile?.bio ?? null,
+    createdAt: profile?.created_at ?? null,
   };
 }
 

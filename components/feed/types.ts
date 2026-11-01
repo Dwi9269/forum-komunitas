@@ -404,6 +404,25 @@ export function toCommunity(hasil: unknown, fallbackSlug?: string): CommunityVie
   return view.slug ? view : null;
 }
 
+/**
+ * Format angka ringkas bahasa Indonesia untuk statistik (PRD 18.2.3):
+ * 12 → "12", 1200 → "1,2 rb", 250000 → "250 rb". Gagal format (runtime lawas)
+ * → format penuh toLocaleString("id-ID"). Bukan angka → "".
+ */
+export function formatAngkaRingkas(nilai: number | null | undefined): string {
+  if (nilai === null || nilai === undefined || !Number.isFinite(nilai)) {
+    return "";
+  }
+  try {
+    return new Intl.NumberFormat("id-ID", {
+      notation: "compact",
+      maximumFractionDigits: 1,
+    }).format(nilai);
+  } catch {
+    return nilai.toLocaleString("id-ID");
+  }
+}
+
 // ============================================================
 // Waktu relatif bahasa Indonesia (mis. "2 jam lalu" — PRD 22.1)
 // ============================================================

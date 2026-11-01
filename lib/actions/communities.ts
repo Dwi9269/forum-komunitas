@@ -6,11 +6,13 @@
  * komunitas hanya admin (MVP) — bagian dari aksi moderasi/admin, bukan file
  * ini.
  *
- * Catatan DB (FASE1-DB): tidak ada view statistik komunitas, dan RLS
- * `community_members` hanya mengizinkan membaca keanggotaan SENDIRI —
- * jumlah anggota/post per komunitas TIDAK bisa dihitung klien. Kolom
- * memberCount/postCount dikirim null; kebutuhan view statistik dicatat di
- * handoff Fase 3 untuk DB-AGENT berikutnya.
+ * Catatan DB: RLS `community_members` hanya mengizinkan membaca keanggotaan
+ * SENDIRI — jumlah anggota/post per komunitas tidak bisa dihitung klien.
+ * Sejak migrasi 0005, view `community_stats` (definer; kolom persis
+ * community_id, member_count, post_count; grant SELECT ke authenticated)
+ * menyediakan angkanya — dibaca SEKALI lalu dipetakan by id (bukan query
+ * per komunitas). Gagal membaca view tidak menggagalkan permintaan: angka
+ * jatuh ke null (UI menyembunyikan angka).
  */
 
 import {
@@ -34,8 +36,9 @@ export interface CommunitySummary {
   name: string;
   description: string | null;
   created_at: string;
-  /** Belum tersedia di DB Fase 1 (tidak ada view statistik) — selalu null. */
+  /** Jumlah anggota dari view community_stats (migrasi 0005); null bila gagal dibaca. */
   memberCount: number | null;
+  /** Jumlah post terlihat dari view community_stats; null bila gagal dibaca. */
   postCount: number | null;
   /** Status keanggotaan pengguna sesi terhadap komunitas ini. */
   isJoined: boolean;
@@ -47,6 +50,55 @@ interface CommunityRow {
   name: string;
   description: string | null;
   created_at: string;
+}
+
+/** Baris view community_stats (migrasi 0005) — nama kolom persis di DB. */
+interface CommunityStatsRow {
+  community_id: string;
+  member_count: number | null;
+  post_count: number | null;
+}
+
+interface CommunityStats {
+  memberCount: number | null;
+  postCount: number | null;
+}
+
+/**
+ * Baca view `community_stats` SEKALI lalu petakan by community_id.
+ * Bila `ids` diberikan, hanya komunitas itu yang dimuat (.in); tanpa ids
+ * seluruh view (tabel kecil) dibaca. Kegagalan (RLS/jaringan) → peta kosong;
+ * pemanggil memakai memberCount/postCount null (bukan error fatal).
+ */
+async function fetchCommunityStats(
+  supabase: SupabaseClient,
+  ids?: string[],
+): Promise<Map<string, CommunityStats>> {
+  const peta = new Map<string, CommunityStats>();
+  try {
+    if (ids && ids.length === 0) {
+      return peta;
+    }
+    let query = supabase
+      .from("community_stats")
+      .select("community_id, member_count, post_count");
+    if (ids) {
+      query = query.in("community_id", ids);
+    }
+    const { data, error } = await query;
+    if (error) {
+      return peta;
+    }
+    for (const row of (data ?? []) as CommunityStatsRow[]) {
+      peta.set(row.community_id, {
+        memberCount: row.member_count ?? null,
+        postCount: row.post_count ?? null,
+      });
+    }
+  } catch {
+    // View tidak terbaca → angka tetap null; halaman tetap tampil.
+  }
+  return peta;
 }
 
 /** Bentuk gagal standar { ok:false, code, message }. */
@@ -91,15 +143,21 @@ export async function getCommunities(): Promise<ActionResult<{
     }
     const supabase = await createClient();
 
-    const [{ data: rows, error: listError }, { data: memberRows, error: memberError }] =
-      await Promise.all([
-        supabase
-          .from("communities")
-          .select("id, slug, name, description, created_at")
-          .order("name", { ascending: true }),
-        // RLS members_select_own: hanya keanggotaan sendiri yang terlihat.
-        supabase.from("community_members").select("community_id").eq("user_id", user.id),
-      ]);
+    const [
+      { data: rows, error: listError },
+      { data: memberRows, error: memberError },
+      stats,
+    ] = await Promise.all([
+      supabase
+        .from("communities")
+        .select("id, slug, name, description, created_at")
+        .order("name", { ascending: true }),
+      // RLS members_select_own: hanya keanggotaan sendiri yang terlihat.
+      supabase.from("community_members").select("community_id").eq("user_id", user.id),
+      // View community_stats (0005): jumlah anggota/post semua komunitas —
+      // dibaca sekali, dipetakan by id (PRD 18.2.3).
+      fetchCommunityStats(supabase),
+    ]);
     if (listError) {
       return failure(extractErrorCode(listError));
     }
@@ -115,8 +173,8 @@ export async function getCommunities(): Promise<ActionResult<{
       data: {
         communities: ((rows ?? []) as CommunityRow[]).map((row) => ({
           ...row,
-          memberCount: null,
-          postCount: null,
+          memberCount: stats.get(row.id)?.memberCount ?? null,
+          postCount: stats.get(row.id)?.postCount ?? null,
           isJoined: joined.has(row.id),
         })),
       },
@@ -158,12 +216,17 @@ export async function getCommunityBySlug(
     }
     const row = data as CommunityRow;
 
-    const { data: membership, error: memberError } = await supabase
-      .from("community_members")
-      .select("community_id")
-      .eq("community_id", row.id)
-      .eq("user_id", user.id)
-      .maybeSingle();
+    const [{ data: membership, error: memberError }, stats] = await Promise.all([
+      supabase
+        .from("community_members")
+        .select("community_id")
+        .eq("community_id", row.id)
+        .eq("user_id", user.id)
+        .maybeSingle(),
+      // Statistik komunitas ini dari view community_stats (PRD 18.2.3) —
+      // satu bacaan by id, bukan per komunitas berulang.
+      fetchCommunityStats(supabase, [row.id]),
+    ]);
     if (memberError) {
       return failure(extractErrorCode(memberError));
     }
@@ -173,8 +236,8 @@ export async function getCommunityBySlug(
       data: {
         community: {
           ...row,
-          memberCount: null,
-          postCount: null,
+          memberCount: stats.get(row.id)?.memberCount ?? null,
+          postCount: stats.get(row.id)?.postCount ?? null,
           isJoined: membership !== null,
         },
       },

@@ -21,6 +21,8 @@ export interface ArgumenFeed {
   communitySlug?: string;
   username?: string;
   sort?: "new" | "hot";
+  /** Hanya komunitas yang diikuti (PRD 18.2.1 — beranda pengguna login). */
+  onlyJoined?: boolean;
 }
 
 export type HasilAman<T> =

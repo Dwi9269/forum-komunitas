@@ -8,7 +8,7 @@ import {
   ambilKomunitas,
   ambilSesi,
 } from "@/components/feed/server-data";
-import { bacaCursor, toCommunity, toFeedPosts } from "@/components/feed/types";
+import { bacaCursor, formatAngkaRingkas, toCommunity, toFeedPosts } from "@/components/feed/types";
 
 export const metadata = {
   title: "Komunitas",
@@ -87,7 +87,7 @@ export default async function HalamanKomunitas({
               {komunitas.memberCount !== null && (
                 <>
                   {" • "}
-                  {komunitas.memberCount.toLocaleString("id-ID")} anggota
+                  {formatAngkaRingkas(komunitas.memberCount)} anggota
                 </>
               )}
             </p>

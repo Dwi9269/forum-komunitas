@@ -11,7 +11,8 @@
  *   moderasi, PRD 16.6); username tidak bisa diubah (tidak ada di grant).
  * - RLS profiles_update_own: hanya baris milik sendiri.
  * - Validasi cepat PRD 21: bio maksimal 200 karakter (CHECK skema),
- *   avatar harus URL publik bucket `avatars` atau path storage milik
+ *   avatar harus URL publik bucket `avatars` milik sendiri
+ *   (…/object/public/avatars/{user_id}/…) atau path storage milik
  *   sendiri (`{user_id}/{file}`) yang dinormalkan menjadi URL publik.
  */
 
@@ -49,14 +50,31 @@ function failure(err: AppError): { ok: false; code: ErrorCode; message: string }
   return { ok: false, code: err.code, message: err.message };
 }
 
-/** URL publik Supabase Storage untuk bucket avatars: …/object/public/avatars/…. */
-function isAvatarBucketUrl(value: string): boolean {
+/**
+ * URL publik Supabase Storage untuk bucket avatars milik sendiri:
+ * …/object/public/avatars/{user_id}/… (temuan R-10: segmen setelah bucket
+ * WAJIB folder user sesi — avatar milik pengguna lain ditolak).
+ */
+function isAvatarBucketUrl(value: string, userId: string): boolean {
   try {
     const url = new URL(value);
     if (url.protocol !== "https:" && url.protocol !== "http:") {
       return false;
     }
-    return url.pathname.includes("/object/public/avatars/");
+    const marker = "/object/public/avatars/";
+    const index = url.pathname.indexOf(marker);
+    if (index < 0) {
+      return false;
+    }
+    let rest: string;
+    try {
+      rest = decodeURIComponent(url.pathname.slice(index + marker.length));
+    } catch {
+      return false;
+    }
+    // Harus {user_id}/{file} milik sendiri: segmen pertama = user id dan
+    // ada nama file setelahnya.
+    return rest.startsWith(`${userId}/`) && rest.length > userId.length + 1;
   } catch {
     return false;
   }
@@ -94,7 +112,7 @@ export async function updateProfile(
       if (raw === "") {
         avatarValue = null;
       } else if (/^https?:\/\//i.test(raw)) {
-        if (!isAvatarBucketUrl(raw)) {
+        if (!isAvatarBucketUrl(raw, user.id)) {
           return failure(appError("AVATAR_INVALID"));
         }
         avatarValue = raw;

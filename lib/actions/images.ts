@@ -40,6 +40,53 @@ function failure(err: AppError): { ok: false; code: ErrorCode; message: string }
   return { ok: false, code: err.code, message: err.message };
 }
 
+// ============================================================
+// Gate foto akun baru (PRD 4.7 / 18.3.10: akun < 24 jam belum boleh
+// mengunggah foto — penegak akhir tetap can_upload() di DB, migrasi
+// 0002/0003; fungsi ini hanya menonaktifkan tombol proaktif di UI).
+// ============================================================
+
+/** Umur minimum akun sebelum boleh mengunggah foto (jam — PRD 4.7). */
+const UPLOAD_WAIT_MS = 24 * 60 * 60 * 1000;
+
+/** Tidak diekspor: file "use server" hanya boleh mengekspor fungsi async. */
+const PESAN_AKUN_BARU_24JAM =
+  "Foto belum bisa diunggah: akun baru dapat mengunggah foto setelah berumur 24 jam. Kamu masih bisa mengirim post tanpa foto.";
+
+export interface ImageUploadGate {
+  /** true → pemilih foto boleh aktif. */
+  allowed: boolean;
+  /** Alasan ramah saat tidak dibolehkan; null bila tanpa alasan khusus. */
+  reason: string | null;
+}
+
+/**
+ * Cek proaktif boleh upload foto (PRD 18.3.10): dihitung server-side dari
+ * umur akun (SessionProfile.createdAt) — TIDAK memanggil RPC can_upload
+ * (tidak diekspos sebagai RPC). Keputusan konservatif:
+ * - Bukan "active" (suspend/ban) → tidak dibolehkan tanpa alasan foto
+ *   (form utama sudah dinonaktifkan halaman /submit dengan alasan status).
+ * - createdAt tidak terbaca / tidak valid → dibolehkan (jangan mengunci
+ *   pengguna karena kegagalan baca); DB tetap menolak saat upload sungguhan.
+ */
+export async function getImageUploadGate(): Promise<ImageUploadGate> {
+  const user = await getSessionUser();
+  if (!user) {
+    return { allowed: false, reason: null };
+  }
+  if (user.status !== "active") {
+    return { allowed: false, reason: null };
+  }
+  if (!user.createdAt) {
+    return { allowed: true, reason: null };
+  }
+  const dibuat = new Date(user.createdAt).getTime();
+  if (!Number.isFinite(dibuat) || Date.now() - dibuat >= UPLOAD_WAIT_MS) {
+    return { allowed: true, reason: null };
+  }
+  return { allowed: false, reason: PESAN_AKUN_BARU_24JAM };
+}
+
 /**
  * Ambil URL publik semua foto satu post (PRD 24 getPostImages).
  *
