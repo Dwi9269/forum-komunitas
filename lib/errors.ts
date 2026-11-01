@@ -27,6 +27,19 @@ export type ErrorCode =
   // Kondisi tanpa kode eksplisit dari database (PRD bagian 20)
   | "RLS_DENIED" // "RLS menolak"
   | "NETWORK" // "Gagal jaringan"
+  // Kode alur autentikasi (PRD bagian 19 + 21; tidak ada di tabel PRD 20).
+  // Tambahan BACKEND-AGENT Fase 2: dipetakan dari error auth Supabase
+  // (email/password) dan validasi app di lib/actions/auth.ts.
+  | "LOGIN_INVALID" // kredensial salah saat login
+  | "EMAIL_NOT_CONFIRMED" // login sebelum verifikasi email
+  | "ACCOUNT_SUSPENDED" // login dengan akun berstatus suspended
+  | "ACCOUNT_BANNED" // login dengan akun berstatus banned
+  | "EMAIL_INVALID" // format email salah (validasi app, PRD 21)
+  | "EMAIL_TAKEN" // email sudah terdaftar (kontrak signUp, PRD 24)
+  | "USERNAME_TAKEN" // username sudah dipakai (PRD 18.1.3)
+  | "PASSWORD_WEAK" // password < 8 karakter (PRD 21)
+  | "PASSWORD_MISMATCH" // konfirmasi password tidak sama
+  | "PASSWORD_SAME" // password baru sama dengan lama (auth Supabase)
   | "UNKNOWN"; // fallback
 
 export const ERROR_MESSAGES: Record<ErrorCode, string> = {
@@ -43,6 +56,18 @@ export const ERROR_MESSAGES: Record<ErrorCode, string> = {
   NOT_FOUND: "Data tidak ditemukan.",
   RLS_DENIED: "Akunmu tidak bisa melakukan aksi ini saat ini. Cek status akunmu.",
   NETWORK: "Koneksi bermasalah. Coba lagi.",
+  LOGIN_INVALID: "Email atau password salah.",
+  EMAIL_NOT_CONFIRMED:
+    "Email belum diverifikasi. Cek kotak masuk untuk tautan verifikasi.",
+  ACCOUNT_SUSPENDED:
+    "Akunmu sedang disuspend. Tunggu sampai masa sanksi berakhir.",
+  ACCOUNT_BANNED: "Akunmu diblokir. Untuk banding, hubungi admin lewat email.",
+  EMAIL_INVALID: "Format email tidak valid.",
+  EMAIL_TAKEN: "Email sudah terdaftar. Coba login atau gunakan lupa password.",
+  USERNAME_TAKEN: "Username sudah dipakai. Pilih username lain.",
+  PASSWORD_WEAK: "Password minimal 8 karakter.",
+  PASSWORD_MISMATCH: "Konfirmasi password tidak sama dengan password baru.",
+  PASSWORD_SAME: "Password baru sama dengan password lama.",
   UNKNOWN: "Terjadi kesalahan. Coba lagi.",
 };
 
