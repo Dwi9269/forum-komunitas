@@ -59,12 +59,15 @@ export type ErrorCode =
   | "COMMUNITY_INVALID" // slug/nama komunitas tidak valid (dashboard admin)
   | "COMMUNITY_SLUG_TAKEN" // slug komunitas sudah dipakai (unique)
   | "INVITE_INPUT_INVALID" // max_uses/expires_at kode undangan tidak valid
+  | "REGISTRATION_REJECTED" // signUp ditolak trigger tapi pesannya disamarkan GoTrue
   | "UNKNOWN"; // fallback
 
 export const ERROR_MESSAGES: Record<ErrorCode, string> = {
   INVITE_INVALID:
     "Kode undangan tidak valid, sudah dipakai habis, atau kedaluwarsa.",
   USERNAME_INVALID: "Username harus 3–20 karakter: huruf, angka, atau garis bawah.",
+  REGISTRATION_REJECTED:
+    "Pendaftaran ditolak. Pastikan kode undangan masih berlaku dan username belum dipakai orang lain, lalu coba lagi.",
   RATE_LIMIT: "Kamu terlalu cepat. Tunggu beberapa menit lalu coba lagi.",
   PARENT_INVALID: "Komentar yang kamu balas tidak ditemukan.",
   PARENT_UNAVAILABLE: "Komentar yang kamu balas sudah dihapus.",

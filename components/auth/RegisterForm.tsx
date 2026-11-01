@@ -219,8 +219,9 @@ export default function RegisterForm() {
         onChange={() => setErrorUndangan(null)}
       />
       <p className="-mt-2 text-xs text-muted-foreground">
-        Masukkan kode undangan yang kamu terima. Pendaftaran tanpa kode bisa
-        dibuka lewat pengaturan admin.
+        Kode undangan wajib untuk akun kedua dan seterusnya (akun pertama
+        bebas). Minta kodenya ke admin forum — dibuat lewat menu Kode Undangan
+        di dashboard admin.
       </p>
 
       <Button type="submit" size="lg" loading={pending}>

@@ -139,6 +139,27 @@ export async function register(formData: FormData): Promise<RegisterResult> {
   }
 
   const supabase = await createClient();
+
+  // Pra-periksa terpusat (0006 check_register_allowed): beri kode error
+  // SPESIFIK sebelum signUp — GoTrue bisa menyamarkan penolakan trigger
+  // menjadi pesan generik. Bila pra-periksa gagal jalan, lanjut signUp;
+  // trigger DB tetap penjaga akhir.
+  const { data: preCode, error: preError } = await supabase.rpc(
+    "check_register_allowed",
+    { p_username: username, p_code: inviteCode },
+  );
+  if (!preError && typeof preCode === "string" && preCode) {
+    if (preCode === "USERNAME_INVALID") {
+      return toFailure(appError("USERNAME_INVALID"));
+    }
+    if (preCode === "USERNAME_TAKEN") {
+      return toFailure(appError("USERNAME_TAKEN"));
+    }
+    if (preCode === "INVITE_INVALID") {
+      return toFailure(appError("INVITE_INVALID"));
+    }
+  }
+
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
@@ -487,6 +508,12 @@ function mapAuthError(error: unknown): AppErrorLike {
     haystack.includes("username")
   ) {
     return appError("USERNAME_TAKEN");
+  }
+  // Penolakan trigger pendaftaran yang disamarkan GoTrue ("Database error
+  // saving new user"). Pra-periksa 0006 biasanya mencegat lebih dulu; ini
+  // jaring pengaman dengan pesan yang menjelaskan, bukan "kesalahan" kosong.
+  if (/error saving new user|database error when signing up/.test(haystack)) {
+    return appError("REGISTRATION_REJECTED");
   }
 
   return mapped;
