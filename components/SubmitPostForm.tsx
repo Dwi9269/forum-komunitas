@@ -4,9 +4,13 @@ import { useState, useTransition, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
+import Spinner from "@/components/ui/Spinner";
 import Textarea from "@/components/ui/Textarea";
+import ImagePicker from "@/components/ImagePicker";
 import { createPost } from "@/lib/actions/posts";
 import { getCommunities } from "@/lib/actions/communities";
+import { deletePostImage, uploadPostImage } from "@/lib/image/upload";
+import { isFotoError } from "@/lib/image/compress";
 import { extractErrorCode } from "@/lib/errors";
 import {
   bacaIdDariHasil,
@@ -19,12 +23,23 @@ import {
  * - Pilih komunitas (wajib), judul 1–200 (Kirim nonaktif saat kosong, PRD
  *   18.3.2, dengan penghitung n/200), isi maksimal 10.000, checkbox
  *   "Posting sebagai anonim" (PRD 4.3 — anonim hanya untuk post, bukan komentar).
- * - TANPA upload foto (foto baru di Fase 4); status proses "Menyimpan...".
+ * - FOTO (Fase 4, PRD 4.7 / 18.3.3-5 / 18.7 / 25): ImagePicker maks 4 foto;
+ *   saat submit tiap foto dikompres + diunggah lebih dulu (uploadPostImage —
+ *   kompres terjadi di dalamnya, PRD 25.2) lalu path-nya dikirim ke
+ *   createPost({ images: paths }).
+ *   - Progres tampil: "Mengunggah foto 2/4..." lalu "Menyimpan post...".
+ *   - Satu upload gagal → error inline, foto lain yang sudah sukses tetap
+ *     dipakai, tombol Kirim bisa dicoba lagi (hanya foto yang gagal yang
+ *     diunggah ulang — PRD 18.3.4); post TIDAK tersimpan setengah-setengah.
+ *   - createPost gagal setelah upload sukses → file yatim di-rollback lewat
+ *     deletePostImage (PRD 20 kasus tepi 3 / 25.4), foto perlu diunggah ulang.
+ *   - Akun < 24 jam ditolak storage (PRD 18.3.10) → pesan jelas tampil inline.
  * - Sukses → diarahkan ke halaman detail post (PRD 18.3.1).
  */
 
 const JUDUL_MAKS = 200;
 const ISI_MAKS = 10_000;
+const FOTO_MAKS = 4;
 
 const PESAN_JUDUL_KOSONG = "Judul wajib diisi.";
 const PESAN_JUDUL_PANJANG = "Judul maksimal 200 karakter.";
@@ -32,18 +47,41 @@ const PESAN_KOMUNITAS = "Pilih komunitas tujuan post.";
 const PESAN_ISI_KOSONG = "Isi post wajib diisi.";
 const PESAN_ISI_PANJANG = "Isi post maksimal 10.000 karakter.";
 
+/** PRD 18.3.10: akun berumur < 24 jam belum boleh mengunggah foto. */
+const PESAN_AKUN_BARU_24JAM =
+  "Foto belum bisa diunggah: akun baru dapat mengunggah foto setelah berumur 24 jam. Kamu masih bisa mengirim post tanpa foto.";
+
 export interface SubmitPostFormProps {
   communities: { slug: string; name: string }[];
   /** Pesan error bila daftar komunitas gagal dimuat di server. */
   communitiesError: string | null;
   /** Bila diisi → form nonaktif dengan penjelasan (mis. akun disuspend). */
   alasanNonaktif?: string | null;
+  /**
+   * Bila diisi → pemilih foto dinonaktifkan dengan alasan ini
+   * (PRD 18.3.10 — akun < 24 jam; diisi halaman /submit bila sesi sudah
+   * menyertakan tanggal pembuatan akun).
+   */
+  alasanFotoNonaktif?: string | null;
+}
+
+/** Pesan ramah untuk error alur foto/upload (tanpa detail teknis). */
+function pesanGagalFoto(error: unknown): string {
+  if (isFotoError(error)) return error.message;
+  return extractErrorCode(error).message;
+}
+
+/** Kode yang menandakan storage menolak upload (policy akun < 24 jam). */
+function ditolakStorage(error: unknown): boolean {
+  const kode = (error as { code?: unknown } | null)?.code;
+  return kode === "FORBIDDEN" || kode === "RLS_DENIED";
 }
 
 export default function SubmitPostForm({
   communities,
   communitiesError,
   alasanNonaktif = null,
+  alasanFotoNonaktif = null,
 }: SubmitPostFormProps) {
   const router = useRouter();
   const [daftar, setDaftar] = useState(communities);
@@ -55,16 +93,34 @@ export default function SubmitPostForm({
   const [isi, setIsi] = useState("");
   const [anonim, setAnonim] = useState(false);
 
+  // Foto: daftar file terpilih + path storage per posisi (null = belum terunggah).
+  const [files, setFiles] = useState<File[]>([]);
+  const [paths, setPaths] = useState<(string | null)[]>([]);
+
   const [errorForm, setErrorForm] = useState<string | null>(null);
   const [errorKomunitas, setErrorKomunitas] = useState<string | null>(null);
   const [errorJudul, setErrorJudul] = useState<string | null>(null);
   const [errorIsi, setErrorIsi] = useState<string | null>(null);
+  const [errorFoto, setErrorFoto] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   const nonaktif = Boolean(alasanNonaktif);
+  const fotoNonaktif = nonaktif || Boolean(alasanFotoNonaktif);
   // PRD 18.3.2: judul kosong → tombol Kirim nonaktif.
   const kirimNonaktif =
     nonaktif || pending || judul.trim().length === 0 || komunitas === "";
+
+  /** Ganti daftar foto; path lama tetap dipakai untuk file yang sama. */
+  function gantiFiles(berikut: File[]) {
+    setFiles(berikut);
+    setPaths(
+      berikut.map((file) => {
+        const indeks = files.findIndex((lama) => lama === file);
+        return indeks >= 0 ? (paths[indeks] ?? null) : null;
+      }),
+    );
+  }
 
   /** Coba muat ulang daftar komunitas dari klien (server action). */
   async function muatKomunitas() {
@@ -85,12 +141,22 @@ export default function SubmitPostForm({
     }
   }
 
+  /** Rollback file terunggah bila langkah berikutnya gagal (PRD 25.4). */
+  async function batalkanUnggahan(unggahan: (string | null)[]) {
+    await Promise.allSettled(
+      unggahan
+        .filter((path): path is string => Boolean(path))
+        .map((path) => deletePostImage(path)),
+    );
+  }
+
   function kirim(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const judulBersih = judul.trim(); // trim sebelum validasi (PRD 20.8)
     const isiBersih = isi.trim();
 
     setErrorForm(null);
+    setErrorFoto(null);
     let valid = true;
     if (!komunitas) {
       setErrorKomunitas(PESAN_KOMUNITAS);
@@ -119,24 +185,75 @@ export default function SubmitPostForm({
     if (!valid) return;
 
     startTransition(async () => {
+      // Pelacak unggahan untuk rollback bila langkah setelahnya gagal
+      // (PRD 20 kasus tepi 3 / 25.4).
+      let unggahan: (string | null)[] = paths;
       try {
-        const hasil: unknown = await createPost({
+        // 1) Unggah foto yang belum punya path (retry hanya foto gagal —
+        //    PRD 18.3.4). Kompres + upload dalam satu panggilan per foto.
+        const pathsBaru = [...paths];
+        for (let i = 0; i < files.length; i += 1) {
+          if (pathsBaru[i]) continue;
+          setStatus(
+            files.length > 1
+              ? `Mengunggah foto ${i + 1}/${files.length}...`
+              : "Mengunggah foto...",
+          );
+          try {
+            pathsBaru[i] = await uploadPostImage(files[i]);
+          } catch (err) {
+            setPaths(pathsBaru); // simpan yang sudah sukses
+            if (ditolakStorage(err)) {
+              setErrorFoto(PESAN_AKUN_BARU_24JAM);
+            } else {
+              const posisi =
+                files.length > 1 ? ` (foto ${i + 1}/${files.length})` : "";
+              setErrorFoto(
+                `Gagal mengunggah foto${posisi}: ${pesanGagalFoto(err)} Coba kirim lagi — foto yang sudah berhasil tidak diunggah ulang.`,
+              );
+            }
+            setStatus(null);
+            return; // post tidak tersimpan setengah-setengah (PRD 18.3.4)
+          }
+        }
+        setPaths(pathsBaru);
+        unggahan = pathsBaru;
+
+        // 2) Simpan post dengan path foto (bukan URL) — PRD 25.3.
+        setStatus("Menyimpan post...");
+        const gambar = pathsBaru.filter((path): path is string =>
+          Boolean(path),
+        );
+        const argumen = {
           communitySlug: komunitas,
           title: judulBersih,
           body: isiBersih,
           isAnonymous: anonim,
-        });
+          images: gambar,
+        };
+        const hasil: unknown = await createPost(argumen);
         const gagal = pesanGagalHasil(hasil);
         if (gagal) {
+          // Upload sukses tetapi simpan post gagal → hapus file yatim
+          // (PRD 20 kasus tepi 3); foto diunggah ulang saat retry.
+          await batalkanUnggahan(pathsBaru);
+          setPaths(pathsBaru.map(() => null));
           setErrorForm(gagal);
+          setStatus(null);
           return;
         }
+
         // Sukses → diarahkan ke detail post (PRD 18.3.1).
         const id = bacaIdDariHasil(hasil);
         router.replace(id ? `/p/${encodeURIComponent(id)}` : "/");
         router.refresh();
       } catch (err) {
+        // createPost melempar (mis. jaringan) setelah foto terunggah →
+        // rollback file yatim; foto diunggah ulang saat dicoba lagi.
+        await batalkanUnggahan(unggahan);
+        setPaths(unggahan.map(() => null));
         setErrorForm(extractErrorCode(err).message);
+        setStatus(null);
       }
     });
   }
@@ -258,7 +375,49 @@ export default function SubmitPostForm({
         </span>
       </div>
 
-      {/* Foto (maks 4) baru di Fase 4 — sengaja belum ada di form ini. */}
+      {/* Foto (maks 4 — PRD 18.3.5 / 18.7 / 25): pratinjau + hapus per foto
+          ditangani ImagePicker; kompres + upload terjadi saat Kirim. */}
+      <div className="flex flex-col gap-2">
+        <span className="text-sm font-medium text-foreground">
+          Foto{" "}
+          <span className="font-normal text-muted-foreground">
+            (opsional, maks {FOTO_MAKS})
+          </span>
+        </span>
+        {alasanFotoNonaktif ? (
+          <p
+            role="alert"
+            className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2.5 text-sm text-warning"
+          >
+            {alasanFotoNonaktif}
+          </p>
+        ) : (
+          <ImagePicker
+            files={files}
+            onChange={gantiFiles}
+            max={FOTO_MAKS}
+            disabled={nonaktif || pending}
+          />
+        )}
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          Foto dikompres otomatis di perangkatmu sebelum diunggah (JPG, PNG,
+          WebP — maks 10 MB per foto).
+        </p>
+        {errorFoto && (
+          <p role="alert" className="text-sm leading-relaxed text-danger">
+            {errorFoto}
+          </p>
+        )}
+        {status && (
+          <p
+            aria-live="polite"
+            className="flex items-center gap-2 text-sm text-muted-foreground"
+          >
+            <Spinner size="sm" label={status} />
+            {status}
+          </p>
+        )}
+      </div>
 
       {/* Anonim (PRD 4.3: hanya untuk post, bukan komentar) */}
       <label className="flex items-start gap-2.5 text-sm text-foreground">

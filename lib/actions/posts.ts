@@ -16,8 +16,11 @@
  *   tombol edit/hapus miliknya sendiri tetap tampil.
  * - Klien tidak pernah menulis kolom score/is_hidden/edited_at (score dihit
  *   trigger vote; edited_at diisi trigger posts_touch_edit).
- * - Belum ada media: foto (post_images) masuk Fase 4 — aksi getPostImages
- *   dan upload menyusul (kontrak PRD 24 baris getPostImages).
+ * - Foto (Fase 4): MEDIA-AGENT mengunggah file ke bucket `post-images` pada
+ *   path `{user_id}/{uuid}.{ext}` langsung dari browser (kompres + buang
+ *   EXIF di klien, PRD 25); file ini hanya menerima DAFTAR PATH di
+ *   createPost lalu menyimpan relasi `post_images`, dan membaca foto untuk
+ *   feed/detail sebagai URL publik. Upload tidak pernah dilakukan di server.
  *
  * Pagination kursor: cursor = offset yang di-encode (base64url JSON),
  * opaque bagi klien. Filter (communitySlug/username/search/sort/onlyJoined)
@@ -64,6 +67,11 @@ export interface FeedPost {
   is_mine: boolean;
   /** Vote pengguna sesi atas post ini; null = belum memilih. */
   my_vote: -1 | 0 | 1 | null;
+  /**
+   * URL publik foto post (bucket post-images), urut position — Fase 4.
+   * Kosong bila post tanpa foto atau gagal memuat (bukan error feed).
+   */
+  images: string[];
 }
 
 /** Komentar dari view comments_view (PRD 16.7) untuk satu post. */
@@ -125,6 +133,12 @@ export interface CreatePostInput {
   /** Isi teks; boleh kosong (tersimpan null sesuai skema). */
   body?: string;
   isAnonymous?: boolean;
+  /**
+   * Path storage foto hasil unggahan MEDIA-AGENT (Fase 4), persis
+   * `{user.id}/{uuid}.{ext}` di bucket post-images — maksimal 4 (PRD 25).
+   * Bukan URL, bukan base64: file SUDAH diunggah klien sebelum createPost.
+   */
+  images?: string[];
 }
 
 export interface EditPostInput {
@@ -139,6 +153,16 @@ export interface EditPostInput {
 
 const DEFAULT_FEED_LIMIT = 20;
 const MAX_FEED_LIMIT = 50;
+
+/** Batas foto per post (PRD 25: files.length > 4 → IMAGE_LIMIT). */
+const MAX_POST_IMAGES = 4;
+
+/** Baris mentah tabel post_images yang dibutuhkan. */
+interface PostImageRow {
+  post_id: string;
+  storage_path: string;
+  position: number;
+}
 
 /** Baris mentah view posts_feed sebelum my_vote dipertipakan. */
 interface PostFeedRow {
@@ -180,7 +204,65 @@ function narrowVote(value: number | null): -1 | 0 | 1 | null {
 }
 
 function toFeedPost(row: PostFeedRow): FeedPost {
-  return { ...row, my_vote: narrowVote(row.my_vote) };
+  // images diisi [] dulu, lalu ditimpa URL asli oleh withImages().
+  return { ...row, my_vote: narrowVote(row.my_vote), images: [] };
+}
+
+/**
+ * Muat URL publik foto untuk banyak post sekaligus (satu query per halaman
+ * feed). Gagal memuat HANYA dicatat — feed tetap tampil tanpa foto
+ * (RLS pimg_select menyaring foto post yang tidak terlihat).
+ */
+async function fetchImageUrls(
+  supabase: SupabaseClient,
+  postIds: string[],
+): Promise<Map<string, string[]>> {
+  const map = new Map<string, string[]>();
+  const ids = [...new Set(postIds.filter(Boolean))];
+  if (ids.length === 0) {
+    return map;
+  }
+  try {
+    const { data, error } = await supabase
+      .from("post_images")
+      .select("post_id, storage_path, position")
+      .in("post_id", ids)
+      .order("position", { ascending: true })
+      .order("id", { ascending: true });
+    if (error) {
+      console.error("posts: gagal memuat foto post —", error.message);
+      return map;
+    }
+    const bucket = supabase.storage.from("post-images");
+    for (const row of (data ?? []) as PostImageRow[]) {
+      const list = map.get(row.post_id) ?? [];
+      list.push(bucket.getPublicUrl(row.storage_path).data.publicUrl);
+      map.set(row.post_id, list);
+    }
+  } catch (e) {
+    console.error("posts: gagal memuat foto post —", e);
+  }
+  return map;
+}
+
+/** Tempelkan images ke tiap post lalu susun hasil FeedData standar. */
+async function withImages(
+  supabase: SupabaseClient,
+  posts: FeedPost[],
+  limit: number,
+  offset: number,
+): Promise<ActionResult<FeedData>> {
+  const imageMap = await fetchImageUrls(
+    supabase,
+    posts.map((p) => p.id),
+  );
+  for (const post of posts) {
+    post.images = imageMap.get(post.id) ?? [];
+  }
+  return {
+    ok: true,
+    data: { posts, nextCursor: nextCursor(posts.length, limit, offset) },
+  };
 }
 
 function toCommentItem(row: CommentRow): CommentItem {
@@ -312,10 +394,7 @@ export async function getFeed(
         return failure(extractErrorCode(error));
       }
       const posts = ((data as PostFeedRow[] | null) ?? []).map(toFeedPost);
-      return {
-        ok: true,
-        data: { posts, nextCursor: nextCursor(posts.length, limit, offset) },
-      };
+      return withImages(supabase, posts, limit, offset);
     }
 
     // Jalur view posts_feed untuk filter username/search. Sort "hot" di
@@ -370,10 +449,7 @@ export async function getFeed(
       return failure(extractErrorCode(error));
     }
     const posts = ((data as PostFeedRow[] | null) ?? []).map(toFeedPost);
-    return {
-      ok: true,
-      data: { posts, nextCursor: nextCursor(posts.length, limit, offset) },
-    };
+    return withImages(supabase, posts, limit, offset);
   } catch (e) {
     return failure(extractErrorCode(e));
   }
@@ -423,10 +499,16 @@ export async function getPost(id: string): Promise<ActionResult<PostDetailData>>
       return failure(extractErrorCode(commentError));
     }
 
+    const post = toFeedPost(postRow as PostFeedRow);
+    // Foto detail post (Fase 4): URL publik urut position; kosong bila
+    // gagal memuat / post tanpa foto.
+    const imageMap = await fetchImageUrls(supabase, [postId]);
+    post.images = imageMap.get(postId) ?? [];
+
     return {
       ok: true,
       data: {
-        post: toFeedPost(postRow as PostFeedRow),
+        post,
         comments: ((commentRows ?? []) as CommentRow[]).map(toCommentItem),
       },
     };
@@ -436,7 +518,7 @@ export async function getPost(id: string): Promise<ActionResult<PostDetailData>>
 }
 
 // ============================================================
-// Aksi: buat post (PRD 24 createPost; foto[] = Fase 4)
+// Aksi: buat post (PRD 24 createPost; foto[] via path MEDIA-AGENT, PRD 25)
 // ============================================================
 
 export async function createPost(
@@ -458,6 +540,35 @@ export async function createPost(
     const bodyError = validatePostBody(body);
     if (bodyError) {
       return failure(bodyError);
+    }
+
+    // Validasi foto (PRD 25: maks 4; path wajib di folder user sendiri —
+    // RLS pimg_insert + policy storage menuntut hal yang sama). Divalidasi
+    // SEBELUM post dibuat agar tidak ada post yang kehilangan fotonya.
+    const imagePaths: string[] = [];
+    if (input.images !== undefined) {
+      if (!Array.isArray(input.images) || input.images.length > MAX_POST_IMAGES) {
+        return failure(appError("IMAGE_INVALID"));
+      }
+      const seen = new Set<string>();
+      for (const raw of input.images) {
+        const path = typeof raw === "string" ? raw.trim() : "";
+        if (!path) {
+          continue;
+        }
+        if (!path.startsWith(`${user.id}/`)) {
+          // Bukan path milik sendiri → buang dan catat (RLS akan menolak juga).
+          console.warn(
+            `createPost: abaikan path foto ${JSON.stringify(path)} — bukan di folder ${user.id}/`,
+          );
+          continue;
+        }
+        if (seen.has(path)) {
+          continue;
+        }
+        seen.add(path);
+        imagePaths.push(path);
+      }
     }
 
     const supabase = await createClient();
@@ -512,7 +623,32 @@ export async function createPost(
     }
 
     // PRD 24: hasil createPost adalah id post (untuk redirect ke detail).
-    return { ok: true, data: { id: (data as { id: string }).id } };
+    const postId = (data as { id: string }).id;
+
+    // Simpan relasi foto (PRD 25.4 langkah 3). Kegagalan SATU foto HANYA
+    // dicatat — post tetap tayang tanpa foto itu (instruksi Fase 4; berbeda
+    // dari PRD 25.4 yang menghapus post). File yatim di storage dibersihkan
+    // job mingguan (PRD 20 kasus tepi 3). Catatan: RLS pimg_insert juga
+    // menuntut can_upload() (akun ≥ 24 jam atau moderator/admin, PRD 18.3.10)
+    // sehingga akun baru bisa saja gagal di sini. Kolom width/height tidak
+    // dikirim kontrak (images: string[]) → tersimpan null.
+    if (imagePaths.length > 0) {
+      for (let i = 0; i < imagePaths.length; i++) {
+        const { error: imgError } = await supabase.from("post_images").insert({
+          post_id: postId,
+          storage_path: imagePaths[i],
+          position: i,
+        });
+        if (imgError) {
+          console.error(
+            `createPost: gagal menyimpan foto "${imagePaths[i]}" —`,
+            imgError.message,
+          );
+        }
+      }
+    }
+
+    return { ok: true, data: { id: postId } };
   } catch (e) {
     return failure(extractErrorCode(e));
   }

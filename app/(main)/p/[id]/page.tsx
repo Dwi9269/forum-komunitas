@@ -5,6 +5,8 @@ import ErrorState from "@/components/ui/ErrorState";
 import VoteButtons from "@/components/VoteButtons";
 import CommentTree from "@/components/CommentTree";
 import CommentForm from "@/components/CommentForm";
+import PostMenu from "@/components/PostMenu";
+import PostGallery from "@/components/PostGallery";
 import { ambilPost, ambilSesi } from "@/components/feed/server-data";
 import { toPostDetail, waktuRelatif } from "@/components/feed/types";
 
@@ -14,8 +16,10 @@ export const metadata = {
 
 /**
  * Detail post /p/[id] (PRD 6, wireframe PRD 22.2): judul, penulis + waktu
- * relatif + label (diedit), isi lengkap (teks biasa), vote (optimistic),
- * form komentar, dan komentar bertingkat.
+ * relatif + label (diedit), isi lengkap (teks biasa), galeri foto (maks 4,
+ * klik untuk perbesar — Fase 4), vote (optimistic), menu titik tiga
+ * (Lapor / Hapus bila milik sendiri), form komentar, dan komentar
+ * bertingkat dengan vote + menu masing-masing.
  */
 export default async function DetailPostPage({
   params,
@@ -70,14 +74,23 @@ export default async function DetailPostPage({
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between gap-3">
         {kembali}
-        {post.communitySlug && (
-          <Link
-            href={`/c/${encodeURIComponent(post.communitySlug)}`}
-            className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <Badge variant="primary">c/{post.communitySlug}</Badge>
-          </Link>
-        )}
+        <div className="flex items-center gap-2">
+          {post.communitySlug && (
+            <Link
+              href={`/c/${encodeURIComponent(post.communitySlug)}`}
+              className="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <Badge variant="primary">c/{post.communitySlug}</Badge>
+            </Link>
+          )}
+          {/* Menu titik tiga: Lapor untuk semua, Hapus bila milik sendiri
+              (PRD 4.6 / 18.3.8). */}
+          <PostMenu
+            targetType="post"
+            targetId={post.id}
+            isMine={post.isMine}
+          />
+        </div>
       </div>
 
       {/* Isi post (wireframe 22.2) */}
@@ -100,6 +113,12 @@ export default async function DetailPostPage({
           <p className="mt-3 whitespace-pre-wrap break-words text-base leading-relaxed text-foreground">
             {post.content}
           </p>
+        )}
+        {/* Galeri foto post (maks 4 — PRD 18.3.5); klik untuk perbesar. */}
+        {post.images.length > 0 && (
+          <div className="mt-3">
+            <PostGallery images={post.images} title={post.title} />
+          </div>
         )}
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <VoteButtons
@@ -145,7 +164,8 @@ export default async function DetailPostPage({
         <CommentTree
           postId={post.id}
           comments={comments}
-          isLoggedIn={sudahMasuk && !dinonaktifkan}
+          isLoggedIn={sudahMasuk}
+          dinonaktifkan={dinonaktifkan}
         />
       </section>
     </div>

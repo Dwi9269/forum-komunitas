@@ -420,3 +420,453 @@ Format entri per skill `forum-multi-agent-builder` bagian 5. Selama fase berjala
 - Verifikasi manual tambahan: default kolom `profiles.status='active'`, `role='member'` — alur registrasi di level database sehat.
 - Tool baru: `scripts/run-migrations.mjs` (migrasi idempoten + uji RLS), `scripts/exec-sql.mjs` (eksekusi SQL arbitrer). Kredensial SELALU lewat env `SUPA_DB_PASSWORD` — tidak pernah ditulis ke file; `pg` ditambahkan sebagai devDependency.
 - Yang dibutuhkan dari agent lain: tidak ada. DEVOPS (Fase 6): ingat set `NEXT_PUBLIC_SITE_URL` saat deploy dan aktifkan SMTP (PRD 23.3) sebelum undang pengguna.
+ 
+# FASE 4 — DB-AGENT
+
+## [FASE 4] DB-AGENT -> ORCHESTRATOR/BACKEND-AGENT
+- Selesai: 1 migrasi baru `0005_community_stats.sql` — view statistik komunitas (definer) + grant/revoke mengikuti pola 0003. RPC moderasi target 'user' dicek terhadap PRD 16.6: SUDAH didukung implementasi live 0002, jadi TIDAK ada fungsi baru — hanya komentar hasil pengecekan di dalam file (file tetap wajib ada sesuai instruksi).
+- File yang dibuat/diubah:
+  - supabase/migrations/0005_community_stats.sql
+  - docs/handoff/FASE4-DB.md (file ini)
+- Kontrak yang disediakan:
+  - View `public.community_stats` — nama kolom PERSIS:
+    - `community_id uuid` (id komunitas; satu baris per komunitas, semua komunitas termasuk yang kosong)
+    - `member_count bigint` (jumlah baris `community_members` komunitas itu)
+    - `post_count bigint` (jumlah post komunitas itu yang TIDAK `is_deleted` dan TIDAK `is_hidden`)
+  - View dibuat `security_invoker = false` (definer, disengaja — sama dengan `posts_feed`/`comments_view`): angka terbaca penuh oleh semua `authenticated` tanpa perlu role khusus. JANGAN diubah ke `security_invoker = true` (RLS `community_members`/`posts` akan membuat angka jadi 0/salah untuk user biasa).
+  - Hak akses: `grant select on public.community_stats to authenticated;` dan `revoke select ... from anon;` (anon permission denied).
+  - RPC moderasi (tidak berubah, sudah live sejak 0002): `mod_apply_action(p_action, p_target_type, p_target_id, p_reason default null, p_days default 3)` mendukung `p_target_type='user'` untuk `suspend` (pakai `p_days`), `ban`, dan `restore` (reaktivasi: status kembali `active`, `suspended_until` null); `hide`/`delete` terhadap user ditolak `ACTION_INVALID`; moderator tidak bisa menindak admin; setiap aksi selalu tercatat di `mod_actions`.
+- Yang dibutuhkan dari agent lain:
+  - ORCHESTRATOR: terapkan `0005_community_stats.sql` via `scripts/run-migrations.mjs` (urut setelah 0004; file idempoten — `create or replace view` + `alter view ... set`).
+  - BACKEND-AGENT: untuk halaman `/c/[slug]` (PRD 18.2.3) dan daftar komunitas, baca angka dari `community_stats` (mis. `.from('community_stats').select('*')` atau filter `.eq('community_id', id)`) — JANGAN menghitung sendiri dari tabel mentah `community_members`/`posts` (RLS akan membatasi). Untuk suspend/ban/reaktivasi user di dashboard admin, panggil RPC `mod_apply_action` yang sudah ada (lihat kontrak di atas); tidak ada RPC baru.
+- Asumsi / keputusan:
+  - `member_count` = jumlah baris `community_members` (gabung/keluar menambah/menghapus baris — PRD 18.2.2); tidak mengecualikan anggota yang suspended/banned (PRD tidak memintanya).
+  - `post_count` mengikuti instruksi orkestrator: tidak `is_deleted` DAN tidak `is_hidden` (PRD 18.2.3 sendiri hanya menyebut "jumlah anggota").
+  - View tanpa filter komunitas: komunitas tanpa anggota/post tampil dengan nilai 0, agar daftar komunitas lengkap tanpa join tambahan.
+  - Grant/revoke meniru pola 0003: Supabase memberi default privilege SELECT ke `anon` untuk objek baru di schema public, maka dicabut.
+  - `security_invoker` adalah opsi PostgreSQL 15+ — aman untuk Supabase saat ini (PG15/16/17); baris `alter view ... set (security_invoker = false)` ada karena `create or replace view` tidak menimpa opsi view yang sudah ada (jaga-jaga bila view sempat dibuat manual saat uji).
+  - Bug PRD: tidak ditemukan — SQL PRD 16.6 identik dengan implementasi live 0002 dan sudah mendukung target 'user', sehingga tidak ada fungsi tambahan di 0005 (sesuai instruksi, cukup komentar; file tetap ada karena view).
+- Cara memeriksa:
+  1. ORCHESTRATOR: jalankan migrasi 0005 via `scripts/run-migrations.mjs` (atau SQL Editor, urut setelah 0004). Jalankan dua kali untuk bukti idempoten — tidak boleh ada error.
+  2. Di SQL Editor sebagai authenticated: `select * from public.community_stats;` → semua baris komunitas muncul dengan angka penuh. Bandingkan dengan `select count(*) from community_members where community_id = '<id>';` dan `select count(*) from posts where community_id = '<id>' and not is_deleted and not is_hidden;` (angka harus sama; sebagai user biasa dua query ini terbatas RLS, itu wajar).
+  3. Sebagai anon (SQL Editor mode anon / request tanpa login): `select * from public.community_stats;` harus `permission denied`.
+  4. RPC user (sudah live dari 0002, tidak diubah 0005): dari akun moderator panggil `select mod_apply_action('suspend','user','<uuid>','alasan',7);` → profil jadi `status='suspended'`, `suspended_until ≈ now()+7 hari`, baris baru di `mod_actions`; `'ban'` → `status='banned'`; `'restore'` → `status='active'`, `suspended_until` null. Non-moderator → exception `FORBIDDEN`; `'hide'`/`'delete'` pada target user → exception `ACTION_INVALID`.
+ 
+# FASE 4 — BACKEND-AGENT (Foto & moderasi)
+
+## [FASE 4] BACKEND-AGENT -> ORCHESTRATOR / MOD-AGENT / MEDIA-AGENT / FRONTEND-AGENT
+
+- Selesai: aksi foto (`getPostImages`), laporan (`report`), seluruh aksi antrean moderasi & dashboard admin (`getReports`, `modApplyAction` via RPC `mod_apply_action`, `modDismissReports` via RPC `mod_dismiss_reports`, `listUsers`, `listInvites`, `createInvite`, `listCommunitiesAdmin`, `createCommunity`, `updateCommunity`, `getModLog`), profil (`updateProfile`), serta PERLUASAN `posts.ts`: `createPost` menerima `images?: string[]` (path hasil upload MEDIA-AGENT) dan `getFeed`/`getPost` menyertakan `images: string[]` (URL publik) di tiap post. Semua aksi "use server", bentuk hasil tetap `ActionResult<T>` (`{ ok:true, data }` / `{ ok:false, code, message }`), klien server dengan sesi pengguna (RLS aktif), env lazy (build tetap jalan tanpa kredensial). Kontrak lama TIDAK berubah bentuk — hanya ditambah field/baru.
+- File yang dibuat/diubah:
+  - lib/actions/images.ts (baru)
+  - lib/actions/reports.ts (baru)
+  - lib/actions/admin.ts (baru)
+  - lib/actions/profiles.ts (baru)
+  - lib/actions/posts.ts (diubah — hanya TAMBAH: field `images` di FeedPost/CreatePostInput + insert post_images; kontrak/jalur lama tidak disentuh)
+  - lib/errors.ts (diubah: +9 kode pada union `ErrorCode` + `ERROR_MESSAGES`; helper lama tidak berubah)
+  - package.json (diubah: + dependency `browser-image-compression: ^2.0.2` untuk MEDIA-AGENT)
+  - docs/handoff/FASE4-BACKEND.md (file ini)
+  - TIDAK diubah: lib/actions/{auth,communities,comments,votes,comment-tree,validate,index}.ts, lib/supabase/*, app/**, components/** (termasuk ImagePicker milik MEDIA), lib/image/**, supabase/**, middleware.ts, docs/PROGRESS.md.
+- Kontrak yang disediakan (nama item persis snake_case kolom DB):
+
+  ```ts
+  // ================= lib/actions/images.ts =================
+  getPostImages(postId: string): Promise<ActionResult<{ images: string[] }>>
+    // PRD 24 getPostImages. URL publik bucket post-images (getPublicUrl),
+    // urut kolom `position` (PRD 24 eksplisit; post_images TIDAK punya
+    // created_at — lihat asumsi 1), tiebreak id. Siapa boleh baca dijaga RLS
+    // pimg_select: pemilik post/moderator (walau post hidden/deleted);
+    // pengguna lain hanya bila post masih ada di posts_feed (via detail/feed).
+    // Panggilan ke post tersembunyi oleh orang lain → { images: [] } (bukan error).
+    // postId kosong → NOT_FOUND; belum login → LOGIN_REQUIRED.
+
+  // ================= lib/actions/reports.ts =================
+  type ReportTargetType = "post" | "comment";
+  // Alasan yang sah (CHECK DB, PRD 4.6) — konstanta TIDAK diekspor (file
+  // "use server" hanya boleh mengekspor fungsi async); FE menyalin daftar ini.
+  // REPORT_REASONS = ["spam", "porn", "violence_sara", "doxxing", "other"]
+  interface ReportInput {
+    targetType: ReportTargetType;
+    targetId: string;   // uuid
+    reason: string;     // wajib salah satu REPORT_REASONS (CHECK DB, PRD 4.6)
+    note?: string;      // opsional; trim, "" → null, dipangkas 1000 char
+  }
+  report(input: ReportInput): Promise<ActionResult<null>> // PRD 24 report
+    // insert reports (reporter_id, target_type, target_id, reason, note);
+    // status dibiarkan default 'open' (grant kolom DB). Duplikasi laporan
+    // oleh user sama untuk target sama → REPORT_DUPLICATE (pra-cek + fallback
+    // unique violation 23505). Laporan ke-3 dari akun berbeda memicu auto-hide
+    // di trigger DB (PRD 16.6) — tidak ada logika tambahan di app.
+
+  // ================= lib/actions/admin.ts =================
+  type ModerationTargetType = "post" | "comment" | "user";
+  type ModerationAction = "hide" | "delete" | "warn" | "suspend" | "ban" | "restore";
+  type ReportStatus = "open" | "resolved" | "dismissed";
+
+  interface ReportPostSnippet {
+    kind: "post";
+    title: string | null;      // judul utuh (maks 200 sesuai skema)
+    body: string | null;       // dipotong 280 code point
+    is_hidden: boolean;
+    is_deleted: boolean;
+    image_urls: string[];      // URL publik foto post, urut position
+    author_id: string | null;  // penulis ASLI meski post anonim (PRD 18.6.4)
+    author_username: string | null;
+  }
+  interface ReportCommentSnippet {
+    kind: "comment";
+    body: string | null;       // dipotong 280 code point
+    is_removed: boolean;       // is_hidden || is_deleted (semantik comments_view)
+    author_id: string | null;
+    author_username: string | null;
+  }
+  type ReportTargetSnippet = ReportPostSnippet | ReportCommentSnippet;
+
+  interface ReportItem {       // kolom reports (snake_case) + pengayaan
+    id: string;
+    reporter_id: string;
+    reporter_username: string | null;
+    target_type: ModerationTargetType;
+    target_id: string;
+    reason: string;            // spam | porn | violence_sara | doxxing | other
+    note: string | null;
+    status: ReportStatus;
+    created_at: string;
+    report_count: number;      // banyaknya laporan target sama dalam antrean
+    target_snippet: ReportTargetSnippet | null; // null utk target 'user'/hilang
+  }
+  getReports(status?: ReportStatus): Promise<ActionResult<{ reports: ReportItem[] }>>
+    // maks 500 baris terbaru; urut report_count desc lalu created_at desc
+    // (PRD 18.6.4 "paling banyak dilaporkan"). Snippet post HANYA dari tabel
+    // posts mentah (RLS posts_select mengizinkan moderator) — view
+    // posts_feed justru menyembunyikan post yang perlu ditinjau.
+
+  interface ModApplyActionInput {
+    action: ModerationAction;
+    targetType: ModerationTargetType;
+    targetId: string;          // uuid
+    reason: string;            // dicatat di mod_actions; "" → null
+    days?: number;             // lama suspend; tidak dikirim → default RPC 3
+  }
+  modApplyAction(input: ModApplyActionInput): Promise<ActionResult<null>>
+    // PRD 24 modAction → rpc('mod_apply_action',
+    // { p_action, p_target_type, p_target_id, p_reason, p_days? }) — parameter
+    // PERSIS PRD 16.6. Validasi cepat app: kombinasi user+hide/delete dan
+    // days 1–365 → ACTION_INVALID; tipe target/id salah → TARGET_INVALID.
+    // RPC yang menulis data + mod_actions (security definer).
+
+  interface ModDismissReportsInput { targetType: ModerationTargetType; targetId: string; }
+  modDismissReports(input: ModDismissReportsInput): Promise<ActionResult<null>>
+    // PRD 24 modDismiss → rpc('mod_dismiss_reports', { p_target_type, p_target_id }):
+    // laporan open → dismissed + konten tersembunyi otomatis ditampilkan lagi (PRD 16.6).
+
+  interface AdminUserItem {
+    id: string;
+    username: string;
+    role: "member" | "moderator" | "admin";
+    status: "active" | "suspended" | "banned";
+    suspended_until: string | null;
+    created_at: string;
+  }
+  listUsers(search?: string): Promise<ActionResult<{ users: AdminUserItem[] }>>
+    // ilike username (karakter % _ dibersihkan), urut username asc, LIMIT 50.
+
+  interface InviteItem {
+    code: string;
+    created_by: string | null;
+    created_by_username: string | null;
+    max_uses: number;
+    used_count: number;
+    expires_at: string | null;
+    created_at: string;
+  }
+  listInvites(): Promise<ActionResult<{ invites: InviteItem[] }>>
+    // maks 200, terbaru dulu.
+  interface CreateInviteInput { maxUses: number; expiresAt?: string; }
+  createInvite(input: CreateInviteInput): Promise<ActionResult<{ code: string }>>
+    // pre-cek ADMIN; kode 8 karakter A-Z0-9 dibuat server (bukan klien);
+    // maxUses wajib integer 1–1000; expiresAt wajib ISO parseable bila ada
+    // → INVITE_INPUT_INVALID. used_count tidak pernah dikirim (grant DB).
+
+  interface AdminCommunityItem {
+    id: string; slug: string; name: string; description: string | null;
+    created_at: string;
+    member_count: number | null; // null bila view community_stats belum ada
+    post_count: number | null;   // (asumsi kolom view — lihat asumsi 12)
+  }
+  listCommunitiesAdmin(): Promise<ActionResult<{ communities: AdminCommunityItem[] }>>
+  interface CreateCommunityInput { slug: string; name: string; description?: string; }
+  createCommunity(input: CreateCommunityInput): Promise<ActionResult<{ id: string; slug: string }>>
+    // pre-cek ADMIN; slug wajib ^[a-z0-9-]{2,30}$; nama 1–80 char
+    // → COMMUNITY_INVALID; slug duplikat → COMMUNITY_SLUG_TAKEN.
+  interface UpdateCommunityInput { id: string; name?: string; description?: string; }
+  updateCommunity(input: UpdateCommunityInput): Promise<ActionResult<{ id: string }>>
+    // pre-cek ADMIN; patch dibangun dari field yang dikirim; tidak ada field
+    // → sukses tanpa tulis; id tak dikenal → NOT_FOUND.
+
+  interface ModActionItem {
+    id: string;
+    moderator_id: string;
+    moderator_username: string | null;
+    action: ModerationAction;
+    target_type: ModerationTargetType;
+    target_id: string;
+    reason: string | null;
+    created_at: string;
+  }
+  getModLog(limit = 100): Promise<ActionResult<{ actions: ModActionItem[] }>>
+    // dari mod_actions (RLS is_moderator), terbaru dulu, limit di-clamp 1–500.
+
+  // ================= lib/actions/profiles.ts =================
+  // BIO_MAX = 200 (tidak diekspor — file "use server")
+  interface UpdateProfileInput { bio?: string; avatarUrl?: string; }
+  updateProfile(input: UpdateProfileInput): Promise<ActionResult<null>>
+    // update profiles milik sendiri (grant kolom DB: avatar_url, bio —
+    // username/role/status tidak bisa lewat sini). bio: trim, > 200 code
+    // point → BIO_TOO_LONG, "" → null. avatarUrl: URL publik bucket avatars
+    // (pathname mengandung /object/public/avatars/) ATAU path storage
+    // `{user.id}/{file}` yang dinormalkan ke URL publik; lainnya →
+    // AVATAR_INVALID; "" → hapus (null). Tidak ada field → no-op sukses.
+
+  // ================= lib/actions/posts.ts (PERLUASAN — kolom lama tetap) =================
+  interface CreatePostInput {
+    communityId?: string; communitySlug?: string; title: string;
+    body?: string; isAnonymous?: boolean;
+    images?: string[];   // BARU: path storage bucket post-images milik sendiri
+                         // (`${user.id}/${uuid}.${ext}`), maks 4 (PRD 25)
+  }
+  interface FeedPost { /* kolom lama persis Fase 3 */ images: string[]; } // BARU
+  // getFeed: tiap FeedPost.images = URL publik urut position (1 query
+  // post_images per halaman). getPost: data.post.images terisi sama.
+  // Gagal memuat foto → images: [] + console.error (feed/detail tetap sukses).
+  ```
+
+- Kode error per aksi:
+  - Semua aksi: `LOGIN_REQUIRED` (belum login), `NETWORK`/`UNKNOWN`/`RLS_DENIED` dari extractErrorCode.
+  - getPostImages: NOT_FOUND (postId kosong).
+  - report: REPORT_INVALID (tipe target/id/nilai alasan tidak dikenal), REPORT_DUPLICATE (PRD 18.6.2 "Kamu sudah melaporkan ini"), RLS_DENIED (akun suspended/banned — RLS reports_insert menuntut is_active_user).
+  - getReports / listUsers / listInvites / getModLog / modApplyAction / modDismissReports / listCommunitiesAdmin: FORBIDDEN (bukan moderator/admin — pre-cek), plus error dari RPC moderasi: ACTION_INVALID, TARGET_INVALID, NOT_FOUND, FORBIDDEN (moderator menindak admin — PRD 18.6.6).
+  - createInvite: FORBIDDEN (bukan admin), INVITE_INPUT_INVALID.
+  - createCommunity/updateCommunity: FORBIDDEN (bukan admin), COMMUNITY_INVALID, COMMUNITY_SLUG_TAKEN, NOT_FOUND (id salah).
+  - createPost (baru): IMAGE_INVALID (images > 4 atau bukan array); path bukan milik sendiri dibuang + console.warn (bukan error); kegagalan insert satu foto hanya console.error — post tetap sukses.
+  - updateProfile: BIO_TOO_LONG, AVATAR_INVALID, NOT_FOUND (profil hilang).
+- Yang dibutuhkan dari agent lain:
+  - MEDIA-AGENT: (a) jalankan `npm install` — package.json sudah berisi `browser-image-compression@^2.0.2` (owner package.json = BACKEND-AGENT; saya TIDAK menjalankan npm); (b) unggah foto ke bucket `post-images` path `${user.id}/${uuid}.${ext}` dari browser (PRD 25.2–25.3), lalu kirim DAFTAR PATH (BUKAN URL, BUKAN base64) sebagai `images` ke `createPost`; (c) avatar: unggah ke bucket `avatars` lalu kirim path/URL publik ke `updateProfile({ avatarUrl })`.
+  - MOD-AGENT: pakai lib/actions/admin.ts (semua bentuk item snake_case persis seperti di atas). Antrean: `getReports("open")`; tombol tindakan → `modApplyAction`; "Tolak laporan" → `modDismissReports`; kombinasi `targetType:"user"` hanya boleh dengan action `warn`/`suspend`/`ban`/`restore` (hide/delete pada user ditolak ACTION_INVALID, sama seperti RPC).
+  - FRONTEND-AGENT: `FeedPost` kini punya `images: string[]` (tambahan — kode lama tetap valid); dialog lapor panggil `report()`; halaman pengaturan panggil `updateProfile()`; `SessionProfile.avatarUrl` dari getSessionUser() akan terisi setelah updateProfile sukses (panggil ulang session/refresh).
+  - DB-AGENT (Fase 4): view `community_stats` — saya mengasumsikan kolom `community_id, member_count, post_count` (lihat asumsi 12); selama view belum ada, `listCommunitiesAdmin` tetap sukses dengan angka null.
+- Asumsi / keputusan:
+  1. Urutan foto memakai kolom `position` (PRD 24 eksplisit `.order('position')`), BUKAN `created_at` sesuai instruksi awal: tabel `post_images` (migrasi 0001) tidak punya kolom created_at, jadi urutan waktu tidak tersedia; tiebreak `id` untuk deterministik.
+  2. `FeedPost`/`getPost` ditambah field `images: string[]` tanpa mengubah kolom lama; kegagalan baca foto tidak menggagalkan feed/detail (images kosong) — foto bersifat pelengkap.
+  3. `createPost.images` menerima PATH storage (bukan URL): MEDIA-AGENT yang mengunggah dari browser. Validasi app: >4 → IMAGE_INVALID (ditolak sebelum post dibuat); path tidak berawalan `${user.id}/` dibuang + console.warn; duplikat path didedup. Insert post_images dilakukan SATU PER SATU setelah post dibuat; gagal satu hanya dicatat (console.error), post tetap tayang — mengikuti instruksi Fase 4, BERBEDA dari PRD 25.4 (yang menghapus post + file) — file yatim tetap dibersihkan job mingguan (PRD 20 kasus tepi 3).
+  4. Kontrak images hanya string[] → kolom width/height post_images tersimpan null (MEDIA-AGENT memakainya untuk <img> dari hasil kompres; tidak dikirim ke server).
+  5. lib/errors.ts +9 kode pola sama dengan Fase 2/3: REPORT_DUPLICATE, REPORT_INVALID, TARGET_INVALID (dilempar RPC 16.6 untuk tipe target asing), IMAGE_INVALID, BIO_TOO_LONG, AVATAR_INVALID, COMMUNITY_INVALID, COMMUNITY_SLUG_TAKEN, INVITE_INPUT_INVALID.
+  6. `report.reason` divalidasi app terhadap CHECK skema (spam/porn/violence_sara/doxxing/other) supaya pesan cepat; `note` trim, kosong → null, dipangkas 1000 karakter (skema tidak membatasi — UI disarankan batasi juga).
+  7. Pre-cek role admin.ts: level "moderator" (moderator|admin) untuk getReports, kedua RPC moderasi, listUsers, listInvites, getModLog, listCommunitiesAdmin; level "admin" untuk createInvite, createCommunity, updateCommunity (RLS comm_admin/invite_admin_write hanya admin — pre-cek memberi FORBIDDEN yang jelas alih-alih RLS_DENIED). Pre-cek hanya melihat role: moderator yang di-suspend lolos pre-cek lalu ditolak DB (is_moderator() menuntut status active) → RLS_DENIED/FORBIDDEN dari DB, tidak diduplikasi di app.
+  8. getReports: maks 500 baris terbaru (tanpa parameter halaman — kontrak Fase 4 tidak memintanya); `report_count` dihitung dalam jendela antrean yang sama; urutan report_count desc lalu created_at desc (PRD 18.6.4). Snippet dibaca dari TABEL MENTAH posts/comments (moderator lolos RLS posts_select/comments_select) karena view justru menyembunyikan konten yang perlu ditinjau — sesuai instruksi. Bacaan sekunder (posts, comments, profiles, post_images) dibaca per batch 100 id dan soft-fail (array kosong + console.error) agar dashboard tidak mati total; hanya query `reports` yang hard-fail.
+  9. Snippet: body dipotong 280 code point (mendekati char_length, aman emoji) tanpa sufiks; judul utuh (maks 200 skema); penulis asli disertakan meski post anonim (PRD 18.6.4 dan PRD 20 kasus tepi 9) — moderator yang membaca, bukan publik.
+  10. modApplyAction memakai parameter RPC persis PRD 16.6; `p_days` dihapus dari payload bila tidak dikirim sehingga default RPC 3 berlaku; `p_reason` "" → null. Validasi kombinasi `user`+`hide/delete` diduplikasi di app agar pesan cepat (RPC juga menolak).
+  11. createInvite: kode dibuat SERVER (8 char A-Z0-9, crypto.getRandomValues); tabrakan unique (23505) dicoba ulang maks 5 kali lalu UNKNOWN; `used_count` tidak pernah dikirim (grant kolom DB migrasi 0003).
+  12. `listCommunitiesAdmin` membaca view `community_stats` dengan kolom yang DIASUMSIKAN `(community_id, member_count, post_count)`; view belum ada / kolom beda → angka null + console.warn (bukan error). PERLU konfirmasi DB-AGENT bila bentuk view berbeda.
+  13. updateProfile menerima avatar sebagai URL publik bucket avatars ATAU path `{user.id}/...` (dinormalkan ke URL publik via getPublicUrl sebelum disimpan) — keduanya berasal dari upload MEDIA-AGENT; URL eksternal/ bucket lain ditolak AVATAR_INVALID.
+  14. lib/actions/index.ts TIDAK disentuh (di luar daftar file milik Fase 4); komentar daftar modulnya sudah menyebut reports/admin/media.
+- Cara memeriksa:
+  1. `npm install` (menarik browser-image-compression) lalu `npm run build` harus lulus tanpa env asli (env lazy; tidak ada akses DB saat build).
+  2. Login, buat post dengan foto: unggah 2 file via MEDIA (path `.../{user.id}/a.webp`, `.../{user.id}/b.webp`) → `createPost({ communitySlug: "umum", title: "Foto", images: [path1, path2] })` → sukses; `getPost(id)` → `post.images` berisi 2 URL publik urut kirim; `getFeed()` → post sama punya images sama; `getPostImages(id)` → array sama.
+  3. `createPost({ ..., images: [path1, path2, path3, path4, path5] })` → IMAGE_INVALID; path `"/tmp/x.webp"` dibuang otomatis (console.warn) dan post tetap sukses tanpa foto itu; tanpa sesi → LOGIN_REQUIRED.
+  4. `report({ targetType: "post", targetId, reason: "spam" })` → ok; ulang alasan apa pun untuk target sama oleh user sama → REPORT_DUPLICATE; reason "cabul" → REPORT_INVALID. Laporan ke-3 dari 3 akun berbeda → post hilang dari getFeed/getPost pengguna lain (trigger DB), pemilik tetap melihat + punya images.
+  5. Dengan akun moderator: `getReports("open")` → laporan terurut paling banyak dilaporkan, snippet berisi title/body(is_hidden/is_deleted/image_urls) atau komentar(is_removed), reporter_username dan penulis asli terisi meski post anonim; akun member → FORBIDDEN.
+  6. `modApplyAction({ action: "hide", targetType: "post", targetId, reason: "SARA" })` → ok; post menghilang dari view; reports open target itu → resolved; `getModLog()` memuat baris aksi; `modApplyAction({ action: "hide", targetType: "user", ... })` → ACTION_INVALID; `modApplyAction({ action: "suspend", targetType: "user", targetId, reason, days: 7 })` → profil jadi suspended 7 hari (suspend 1/3/7/30 per PRD 18.6.5); `modDismissReports({ targetType: "post", targetId })` → laporan dismissed + post tampil lagi.
+  7. Admin: `createInvite({ maxUses: 5 })` → kode 8 karakter; kode dipakai daftar → used_count naik (trigger); `createInvite({ maxUses: 0 })` → INVITE_INPUT_INVALID; moderator → FORBIDDEN. `createCommunity({ slug: "Umum!", name: "X" })` → COMMUNITY_INVALID; slug duplikat → COMMUNITY_SLUG_TAKEN; `listCommunitiesAdmin()` → counts null sampai view community_stats dibuat DB-AGENT.
+  8. `updateProfile({ bio: "  halo  " })` → bio "halo"; bio 201 char → BIO_TOO_LONG; `updateProfile({ avatarUrl: "https://contoh.com/x.png" })` → AVATAR_INVALID; path `{user.id}/a.webp` → tersimpan sebagai URL publik bucket avatars; `updateProfile({})` → sukses tanpa tulis.
+  9. Akun suspended mencoba report/createPost(images) → RLS_DENIED (RLS/trigger), bukan error app.
+ 
+# FASE 4 — MEDIA-AGENT (Foto)
+
+## [FASE 4] MEDIA-AGENT -> ORCHESTRATOR
+
+- **Selesai**: modul kompres + upload foto Fase 4 sesuai PRD (bagian 4.7, 9, 20, 25.1–25.3, 25.6): `lib/image/compress.ts` (kompres klien via `browser-image-compression` — validasi tipe/ukuran mentah maks 10 MB, resize sisi terpanjang 2048 px, WebP kualitas 0,8 target ±400 KB dengan fallback JPEG bila browser tak bisa encode WebP, EXIF dibuang `preserveExif: false`, batas keras hasil 1 MB) dan `lib/image/upload.ts` (upload ke Supabase Storage pakai klien browser lib/supabase/client.ts — sesi via `auth.getUser`, bucket `post-images` path `{userId}/{uuid}.webp|jpg` mengembalikan **PATH** bukan URL sesuai kontrak BACKEND, avatar bucket `avatars` path `{userId}/avatar-{waktu}.webp` maks 512 KB / 512 px mengembalikan **URL publik**, rollback via `deletePostImage`) serta `components/ImagePicker.tsx` (client component: area pilih file, pratinjau thumbnail via `URL.createObjectURL` + revoke saat daftar berubah/unmount, tombol hapus per foto, hitungan "2/4", pesan error inline untuk tipe tak didukung & file mentah > 10 MB sebelum kompres, mode `single` untuk avatar). Komponen TIDAK memanggil Supabase sama sekali — upload berada di lib/image; semua pesan error Indonesia gaya PRD 20 tanpa detail teknis; env tetap lazy (build-safe).
+
+- **File yang dibuat** (milik MEDIA-AGENT, tidak ada file lain yang disentuh):
+  - lib/image/compress.ts — kompres + validasi foto klien (PRD 25.2, 4.7, 9). Dependensi `browser-image-compression` diimport (versi ^2.0.2 milik BACKEND di package.json).
+  - lib/image/upload.ts — upload/rollback ke Supabase Storage (PRD 25.3, 9), sesi dari klien browser.
+  - components/ImagePicker.tsx — pemilih + pratinjau foto (PRD 22, 25.6.2–3), controlled component tanpa akses Supabase.
+  - docs/handoff/FASE4-MEDIA.md (file ini). TIDAK menyentuh package.json, lib/errors.ts, lib/actions/**, app/**, components/SubmitPostForm.tsx, settings.
+
+- **Kontrak yang disediakan** (dipakai FRONTEND-AGENT untuk /submit & /settings):
+  - `compressImage(file: File, options?: CompressOptions): Promise<File>` — validasi (melempar) lalu kompres; default 2048 px / target 0,4 MB / batas keras 1 MB. `CompressOptions { maxWidthOrHeight?: number; maxSizeMB?: number; maxFinalBytes?: number }`. Hasil selalu WebP atau JPEG (`File` baru bernama `<nama>.webp|.jpg`).
+  - `uploadPostImage(file: File): Promise<string>` — kompres lalu upload ke bucket `post-images`, path `{userId}/{uuid}.webp|jpg`; **mengembalikan path storage** (kirimkan ke createPost; tabel post_images menyimpan storage_path).
+  - `uploadAvatar(file: File): Promise<string>` — kompres 512 px / batas keras 512 KB, upload ke bucket `avatars`, path `{userId}/avatar-{Date.now()}.webp|jpg`; **mengembalikan URL publik** (simpan ke profiles.avatar_url).
+  - `deletePostImage(path: string): Promise<void>` — hapus satu file `post-images` untuk rollback.
+  - Konstanta & util: `MAX_RAW_BYTES` (10 MB), `MAX_FINAL_BYTES` (1 MB), `AVATAR_MAX_BYTES` (512 KB), `FOTO_TIPE_DIIZINKAN`, `ekstensiDariTipe(tipe)`, `validateImageFile(file)` (melempar), `fotoError(code, message?)`, `isFotoError(error)`, `FOTO_ERROR_MESSAGES`.
+  - Kode error yang dilempar (properti `code` pada `Error`, message sudah ramah): `FOTO_INVALID_TYPE` (tipe tak didukung / HEIC tak terbaca browser), `FOTO_TOO_LARGE` (mentah > 10 MB), `FOTO_STILL_LARGE` (hasil kompres > batas), plus `LOGIN_REQUIRED` (sesi habis), `NETWORK`/`RLS_DENIED`/`FORBIDDEN`/`UNKNOWN` dari extractErrorCode untuk kegagalan storage.
+  - `<ImagePicker files onChange max={4} disabled single />` — controlled: pemanggil memiliki state `File[]`; `single` untuk avatar (satu foto bulat + tombol Hapus/Ganti foto); tidak pernah melempar (error tampil inline); tidak memanggil Supabase.
+  - Pola integrasi /submit (upload dulu, post kemudian — PRD 25.4):
+    ```ts
+    const paths: string[] = [];
+    try {
+      for (const f of files) paths.push(await uploadPostImage(f));
+      const id = await createPost({ ..., imagePaths: paths });
+    } catch (e) {
+      await Promise.allSettled(paths.map((p) => deletePostImage(p))); // rollback; jangan tutup error asli
+      setError(tampilkan(e)); // extractErrorCode(e).message, atau e.message utk kode FOTO_*
+    }
+    ```
+  - Pola menampilkan error: `isFotoError(e) ? e.message : extractErrorCode(e).message`.
+
+- **Yang dibutuhkan dari agent lain**:
+  - BACKEND-AGENT: dependency `browser-image-compression@^2.0.2` di package.json (sedang ditambahkan) — sampai di-install oleh orchestrator, `next build` error "Cannot find module 'browser-image-compression'"; itu diharapkan, bukan bug (pola yang sama dengan Fase 3).
+  - BACKEND-AGENT: mohon daftarkan 4 kode `FOTO_INVALID_TYPE`, `FOTO_TOO_LARGE`, `FOTO_STILL_LARGE`, `FOTO_LIMIT` ke `ErrorCode` + `ERROR_MESSAGES` di lib/errors.ts (nilai bisa disalin dari `FOTO_ERROR_MESSAGES` di lib/image/compress.ts) supaya `extractErrorCode` mengenalinya. Sampai itu, `extractErrorCode` mengembalikan UNKNOWN untuk kode FOTO_* — UI tetap aman memakai `e.message` langsung karena message sudah berisi pesan ramah yang sama.
+  - BACKEND-AGENT: kontrak `createPost` menerima daftar path foto (disimpan ke `post_images.storage_path` + width/height/position bila tersedia) dan melakukan rollback hapus file bila insert post/relasi gagal (PRD 25.4); bucket `post-images` & `avatars` dengan policy "user login hanya upload ke foldernya sendiri" (PRD 9).
+  - FRONTEND-AGENT: integrasi di /submit (ImagePicker + loop `uploadPostImage` + rollback `deletePostImage`, kirim daftar path ke createPost) dan /settings (ImagePicker `single` + `uploadAvatar` → simpan URL ke profil). Jalankan upload HANYA dari client component (module ini butuh browser).
+  - ORCHESTRATOR: `npm install` setelah BACKEND menambahkan dependency.
+
+- **Asumsi / keputusan**:
+  1. Dimensi kompres 2048 px mengikuti instruksi fase (PRD 25.2 menulis 1600 px), tetapi target ukuran tetap 0,4 MB (±200–400 KB, PRD 25.6.4) dan batas keras 1 MB (PRD 9) — dua-duanya terpenuhi sekaligus.
+  2. HEIC/HEIF diterima SEBELUM kompres agar foto iPhone bisa dikonversi bila browser mendukung (PRD 20 kasus tepi 7); bila dekode gagal, error `FOTO_INVALID_TYPE` dengan pesan "coba pilih foto berformat JPG" (PRD 25.6.1). GIF ditolak (tidak didukung MVP). Hasil upload selalu WebP/JPEG sesuai daftar MIME PRD 9.
+  3. Fallback JPEG: dideteksi via `canvas.toDataURL("image/webp")` (di-cache) karena opsi `fileType` library tidak otomatis fallback; ekstensi path mengikuti hasil aktual (`webp`/`jpg`) — path tetap sesuai pola `{userId}/{uuid}` PRD 9.
+  4. `uploadPostImage` sengaja satu file per panggilan dan mengembalikan path (bukan URL) sesuai kontrak BACKEND; batas 4 foto divalidasi UI (ImagePicker, pesan "Maksimal N foto", kode `FOTO_LIMIT` disiapkan) — pemanggil yang menggabungkan.
+  5. Validasi tipe/ukuran hanya di compress.ts (satu sumber kebenaran); upload.ts mempercayainya, lalu menangani sesi, storage, dan pemetaan error via extractErrorCode (NETWORK/RLS_DENIED/UNKNOWN) tanpa membocorkan detail teknis.
+  6. Sesi diambil via `supabase.auth.getUser()` (bukan getSingleSession server) karena upload jalan di browser; sesi kosong → `LOGIN_REQUIRED` dengan pesan PRD 20.
+  7. Avatar pakai `upsert: false` + nama `avatar-{Date.now()}` agar URL lama tidak tertimpa saat upload baru; pemanggil memperbarui profiles.avatar_url (pembersihan avatar lama menyusul kebutuhan).
+  8. `deletePostImage` bisa gagal (mis. RLS) — dilempar sebagai error ramah, tetapi pemanggil disarankan `allSettled`/catch kosong agar error asli tidak tertutup; sisa file yatim dibersihkan job mingguan (PRD 20.3, 23).
+  9. Pratinjau ImagePicker: object URL dibuat per perubahan daftar dan di-revoke pada cleanup effect (mencakup unmount) — tanpa kebocoran; `<img>` diberi width/height + `loading="lazy"` (PRD 25.6.3); input direset (`value = ""`) agar file yang sama bisa dipilih ulang.
+  10. Tidak ada `"use server"`/akses DB di ketiga file; lib/image hanya boleh dipanggil dari client component (compressImage/upload melempar error jelas bila dijalankan di server).
+
+- **Cara memeriksa**:
+  1. `npm install` (setelah BACKEND menambahkan dependency) lalu `npm run build` tanpa env asli — harus lulus (env lazy; tidak ada pemanggilan Supabase saat build).
+  2. Integrasi sementara di halaman apa pun (client): render `<ImagePicker files={f} onChange={setF} />` — pilih 5 foto → pesan "Maksimal 4 foto."; pilih .gif / file > 10 MB → pesan inline, tidak ada pratinjau; hapus per foto mengubah hitungan "2/4".
+  3. Dengan env asli + storage dibuat: pilih foto JPG/PNG besar (±5 MB) → submit → cek bucket `post-images/{userId}/{uuid}.webp` ukuran ±200–400 KB, EXIF (GPS) hilang, path tersimpan lewat createPost.
+  4. Safari lama/tanpa WebP → hasil .jpg; HEIC di Chrome → pesan "Browser tidak bisa membaca foto ini. Coba pilih foto berformat JPG."
+  5. /settings (setelah FRONTEND): avatar 512 px/512 KB muncul dari URL publik; logout lalu coba upload → pesan "Kamu harus login untuk melakukan aksi ini."
+  6. Matikan jaringan saat upload → pesan "Koneksi bermasalah. Coba lagi." (NETWORK), tanpa stack trace di UI.
+ 
+# FASE 4 — MOD-AGENT (Moderasi & admin)
+
+## [FASE 4] MOD-AGENT -> ORCHESTRATOR / FRONTEND-AGENT
+
+- Selesai: seluruh Fase 4 (Moderasi dan admin) — dashboard admin `/admin` dengan guard role, antrean laporan (grouping per target, thumbnail DIBURAMKAN, aksi konten + tolak laporan + aksi penulis), halaman pengguna (pencarian + suspend/blokir/reaktivasi dengan dialog konfirmasi), kode undangan (daftar + buat + salin), komunitas (daftar + buat + edit deskripsi), log moderasi, serta `components/ReportDialog.tsx` untuk FRONTEND-AGENT. Semua UI bahasa Indonesia, mobile-first, hanya memakai kit `components/ui/*` (Button/Card/Badge/Input/Textarea/Avatar/EmptyState/ErrorState/Spinner), tanpa dependensi baru, semua aksi data lewat kontrak `@/lib/actions/reports` + `@/lib/actions/admin` (tidak ada akses Supabase langsung dari UI).
+- File yang dibuat (milik MOD-AGENT — tidak ada file milik agent lain yang disentuh):
+  - app/admin/layout.tsx — guard server `getSessionUser()`: tamu/member → `redirect("/")`; header "Dashboard Admin" + link "← Forum" + nav tab
+  - app/admin/page.tsx — antrean laporan (default), filter status via query param `?status=open|resolved|dismissed`
+  - app/admin/users/page.tsx — pencarian GET `?q=` + daftar pengguna + aksi akun
+  - app/admin/invites/page.tsx — daftar + form buat kode undangan
+  - app/admin/communities/page.tsx — daftar + form buat + edit deskripsi
+  - app/admin/log/page.tsx — 100 tindakan mod_actions terbaru (read-only)
+  - components/ReportDialog.tsx — dialog "Laporkan" (dipakai FRONTEND-AGENT)
+  - components/admin/AdminTabs.tsx — tab aktif via usePathname (wireframe PRD 22.4)
+  - components/admin/ReportsQueue.tsx — client component antrean (aksi + blur thumbnail)
+  - components/admin/UsersPanel.tsx — aksi akun + ConfirmDialog
+  - components/admin/InvitesPanel.tsx — buat kode + tombol salin (clipboard + fallback)
+  - components/admin/CommunitiesPanel.tsx — buat komunitas + edit deskripsi inline
+  - components/admin/ConfirmDialog.tsx — modal konfirmasi ringan (Escape/backdrop/Batal)
+  - components/admin/StatusBadge.tsx — badge status laporan/akun/role/aksi/target (fungsi murni)
+  - components/admin/format.ts — labelAlasan/REASON_LABELS, formatTanggal, idPendek
+  - components/admin/server-data.ts — pembungkus `aman()` try/catch untuk Server Component (pola sama dengan components/feed/server-data.ts milik FRONTEND-AGENT — tidak diubah, dibuat salinan agar tidak saling sentuh)
+  - docs/handoff/FASE4-MOD.md (file ini)
+  - TIDAK diubah: lib/**, app/(main)/**, app/(auth)/**, components/ui/**, components/feed/**, components/*.tsx milik agent lain, supabase/**, middleware.ts, docs/PROGRESS.md, package.json.
+- KONTRAK ReportDialog (PENTING untuk FRONTEND-AGENT — nama prop PERSIS, jangan diubah):
+  ```tsx
+  import ReportDialog from "@/components/ReportDialog";
+  // state di pemilik menu titik-titik:
+  const [lapor, setLapor] = useState<{ type: "post" | "comment"; id: string } | null>(null);
+  <ReportDialog
+    targetType={lapor.type}        // "post" | "comment"
+    targetId={lapor.id}            // uuid target
+    open={lapor !== null}          // boolean
+    onClose={() => setLapor(null)} // () => void
+    onReported={() => { /* opsional: refresh/marked */ }}
+  />
+  ```
+  - Perilaku: kirim via `report({ targetType, targetId, reason, note? })` dari `@/lib/actions/reports`; alasan sesuai nilai CHECK DB (PRD 4.6) — `spam` "Spam", `porn` "Porno / konten dewasa", `violence_sara` "SARA / kekerasan", `doxxing` "Doxxing (membocorkan data pribadi)", `other` "Lainnya" — catatan opsional maks 1000 char; sukses → tampil "Laporan terkirim. Terima kasih." lalu menutup sendiri (±1,6 dtk) dan memanggil `onReported?.()`; error inline (termasuk REPORT_DUPLICATE "Kamu sudah melaporkan ini" dari backend, PRD 18.6.2); tutup via tombol ×, Batal, Escape, klik latar (nonaktif saat mengirim); `open=false` → render null. Mobile-first (bottom-sheet di layar kecil, modal tengah di ≥sm).
+- Struktur dashboard `/admin` (PRD 22.4, 18.6):
+  - Guard: layout `app/admin/layout.tsx` menolak tamu/member (redirect "/"); setiap aksi dijaga ulang dua lapis oleh backend (pre-cek role + RLS/RPC) — layout hanya UX.
+  - Tab: Laporan (`/admin`), Pengguna, Kode Undangan, Komunitas, Log — tab aktif via `usePathname`.
+  - Antrean laporan: default `?status=open`; data `getReports(status)`; laporan target sama dikelompokkan satu kartu — badge "dilaporkan Nx", gabungan alasan, pelapor (maks 2 + "+N lain"), catatan kutip, cuplikan konten + "Penulis asli: @username" (PRD 18.6.4 / 20 kasus tepi 9), badge Tersembunyi/Terhapus.
+  - Thumbnail foto post DIBURAMKAN (CSS `blur-lg` + overlay "Klik untuk lihat", aria-pressed; klik untuk membuka, klik lagi memburamkan) — PRD 22.4.
+  - Tombol per kartu: Sembunyikan (hide), Hapus (delete — post saja, via ConfirmDialog), Pulihkan (restore bila hidden/deleted), Tolak laporan (modDismissReports — hanya saat filter open), plus baris "Tindakan penulis": pilih lama suspend 1/3/7/30 hari (PRD 18.6.5) → Suspend penulis, Blokir penulis (ban, via ConfirmDialog). Target tak lagi ada → hanya info + Tolak laporan (hide/delete pasti NOT_FOUND).
+  - Setiap aksi sukses → `router.refresh()`; pesan sukses/error inline (success status / alert). RPC menutup laporan open otomatis → baris hilang dari filter open setelah refresh.
+  - Pengguna: cari via form GET `?q=` (tanpa JS); per kartu: Avatar, RoleBadge, UserStatusBadge, "Bergabung…", "Suspend sampai…"; aksi Suspend (pilih 1/3/7/30 hari), Blokir, Reaktivasi — SEMUA melewati ConfirmDialog, via `modApplyAction({ targetType: "user" })`. Tombol disembunyikan untuk target admin bila penonton moderator (PRD 18.6.6, server tetap menolak FORBIDDEN) dan untuk akun sendiri.
+  - Kode undangan: daftar (kode mono + Salin, dipakai x/max, kedaluwarsa/tanpa kedaluwarsa, dibuat oleh, badge Aktif/Habis/Kedaluwarsa) + form buat (jumlah pakai maks 1–1000, tanggal kedaluwarsa opsional → ISO 23:59 tanggal itu). Form hanya untuk admin (moderator melihat catatan; FORBIDDEN tetap ditangani inline). Salin: navigator.clipboard + fallback execCommand.
+  - Komunitas: daftar (nama, c/slug, anggota/post dari view community_stats — "—" bila null) + form buat (slug `^[a-z0-9-]{2,30}$`, nama 1–80, deskripsi) + "Edit deskripsi" inline (updateCommunity; kosong → hapus deskripsi). Form/edit hanya admin.
+  - Log: kartu per aksi — ModActionBadge, TargetTypeBadge, uuid dipendekkan (title uuid penuh), "Oleh @moderator", alasan, waktu relatif. Read-only.
+- Kebutuhan dari agent lain:
+  - FRONTEND-AGENT: pasang `ReportDialog` pada menu titik tiga post (PostCard) dan komentar (CommentTree) dengan prop persis seperti di atas — TIDAK perlu mengubah apa pun di components/ReportDialog.tsx. Jangan buat dialog lapor sendiri.
+  - BACKEND-AGENT: kontrak `getReports/modApplyAction/modDismissReports/listUsers/listInvites/createInvite/listCommunitiesAdmin/createCommunity/updateCommunity/getModLog/report` dipakai apa adanya (sudah sesuai handoff FASE4-BACKEND). Tidak ada perubahan kontrak yang diminta.
+  - DB-AGENT: view `community_stats` opsional — angka tampil "—" bila belum ada.
+- Asumsi / keputusan:
+  1. Filter antrean lewat query param server (`?status=`) bukan state client — tetap Server Component, bisa di-bookmark, dan `router.refresh()` setelah aksi otomatis memuat ulang data dengan filter yang sama.
+  2. Laporan digroup per (target_type, target_id) di ReportsQueue (useMemo) agar satu konten = satu kartu aksi (PRD 22.4 "dilaporkan 4x — alasan: porn, spam"); data mentah per-laporan tetap dari `getReports`.
+  3. Alasan dialog lapor memakai nilai DB `spam|porn|violence_sara|doxxing|other` (PRD 4.6) dengan label Indonesia — bukan frasa bebas, karena `report()` menolak nilai di luar CHECK (REPORT_INVALID).
+  4. Aksi penulis (suspend/ban) ikut ditampilkan di antrean (wireframe 22.4 menampilkannya); UI tidak menebak role penulis — moderator yang menindak admin akan menerima FORBIDDEN dari RPC dan pesan error tampil inline (PRD 18.6.6).
+  5. ConfirmDialog dipakai untuk aksi destruktif/permanen: Hapus post, Blokir penulis (antrean) dan SEMUA aksi akun di halaman Pengguna (suspend/blokir/reaktivasi — sesuai instruksi). Hide/restore/dismiss cukup satu klik karena reversibel.
+  6. Opsi suspend 1/3/7/30 hari mengikuti PRD 18.6.5 (instruksi menyebut 1/3/7 — diambil superset agar sesuai PRD; 1/3/7 tetap tersedia).
+  7. `kini` (Date.now() server) dikirim sebagai prop ke InvitesPanel agar hitungan badge kedaluwarsa deterministik saat hidrasi; waktu relatif lain mengikuti pola feed yang sudah ada.
+  8. Halaman admin TIDAK di dalam route group (main) — konsol terpisah dengan header sendiri; middleware sengaja tidak menyentuh /admin (komentar middleware menyebut redirect route protection menyusul — guard layout sudah menutup kebutuhan ini).
+  9. Semua error memakai pesan ramah dari backend (`{ ok:false, message }`) — PRD 20; pemanggilan data server dibungkus `aman()` agar env belum terisi tidak membuat build/halaman mati.
+- Cara memeriksa:
+  1. `npm run build` harus lulus (tidak dijalankan oleh MOD-AGENT sesi ini — batasan hanya Read/Write/Edit; semua file mengikuti pola Fase 1–3 yang sudah build).
+  2. Buka `/admin` sebagai tamu/member → diarahkan ke "/"; sebagai moderator/admin → tab tampil, tab Laporan aktif.
+  3. Buat 3 akun melaporkan post yang sama → antrean memperlihatkan "dilaporkan 3x", gabungan alasan, thumbnail blur (klik untuk melihat), penulis asli tampil meski post anonim.
+  4. Sembunyikan → badge Tersembunyi + tombol berubah Pulihkan; Pulihkan → normal; Hapus (post, dengan konfirmasi) → laporan open jadi Selesai; Tolak laporan → pindah filter Ditolak + konten tampil lagi; semua tercatat di tab Log.
+  5. Tindakan penulis: Suspend 3 hari → halaman Pengguna menampilkan status Suspend + "Suspend sampai …"; Blokir → status Diblokir; Reaktivasi → Aktif. Baris admin tidak punya tombol untuk moderator.
+  6. Tab Kode Undangan (admin): buat kode (mis. 5 pakai) → banner kode baru + Salin; daftar memperlihatkan dipakai/kedaluwarsa; moderator hanya lihat + salin. Tab Komunitas (admin): buat `c/teh-dan-kopi`, edit deskripsi; slug salah/duplikat → pesan COMMUNITY_INVALID/COMMUNITY_SLUG_TAKEN inline.
+  7. Dialog lapor (via FRONTEND-AGENT): pilih alasan wajib, catatan opsional, sukses "Laporan terkirim. Terima kasih." lalu menutup; lapor dua kali target sama → "Kamu sudah melaporkan ini" (REPORT_DUPLICATE).
+ 
+# FASE 4 — FRONTEND-AGENT (Integrasi Fitur di Sisi Pengguna)
+
+## [FASE 4] FRONTEND-AGENT -> ORCHESTRATOR
+
+- **Selesai**: seluruh integrasi fitur Fase 4 di sisi pengguna sesuai PRD (bagian 4.5–4.7, 6, 18.3, 18.4, 18.5, 18.7, 20, 25, 28.1): (1) foto di /submit — ImagePicker (maks 4) + kompres & upload per foto saat Kirim dengan progres "Mengunggah foto 2/4..." → "Menyimpan post...", retry hanya foto yang gagal (PRD 18.3.4), rollback `deletePostImage` bila simpan post gagal (PRD 20.3/25.4), pesan jelas untuk akun < 24 jam (PRD 18.3.10); (2) foto di feed & detail — normalizer membaca `images`, thumbnail foto pertama di PostCard, galeri maks 4 foto di /p/[id] dengan dialog perbesar ringan tanpa dependensi; (3) menu titik tiga (components/PostMenu.tsx) — "Lapor" untuk semua (ReportDialog) + "Hapus" dengan confirm ringan dua langkah bila milik sendiri → deletePost/deleteComment → router.refresh(); terpasang di PostCard, header detail, dan tiap komentar; (4) vote komentar (components/CommentVoteButtons.tsx) — optimistic + pulih saat gagal, setVoteComment, tamu → /login, nonaktif untuk akun disuspend; (5) halaman profil /u/[username] — header (Avatar lg, username, bio bila tersedia) + FeedList mode username dengan state kosong "Belum ada postingan"; (6) halaman /settings + components/SettingsForm.tsx — bio (maks 200 + counter) + avatar (ImagePicker single, uploadAvatar seketika saat pilih dengan pratinjau, bisa dihapus) + Simpan → updateProfile → "Tersimpan" + router.refresh(); (7) halaman /rules (app/legal/rules/page.tsx) — teks aturan PRD 28.1 utuh, tujuan tautan "Baca aturan" banner; (8) normalizer/types diperbarui: `images` (fallback []), `authorAvatar`, komentar `isMine` + `myVote`, dan daftar datar comments_view (parent_id) kini DISUSUN JADI POHON di klien (memperbaiki gap Fase 3: getPost mengembalikan komentar flat, normalizer lama hanya membaca `children`). Semua akses data tetap HANYA lewat lib/actions & lib/image; semua teks user tetap teks biasa (tanpa dangerouslySetInnerHTML); bahasa Indonesia; mobile-first; memakai kit components/ui.
+
+- **File yang dibuat/diubah**:
+  - components/PostMenu.tsx — BARU (client): tombol titik tiga + menu (Lapor / Hapus), tutup saat klik luar/Escape, error inline, feedback "Laporan terkirim." setelah onReported; wrapper memanggil preventDefault+stopPropagation agar aman dipasang di dalam Link PostCard; props `{ targetType: "post"|"comment", targetId, isMine? }`.
+  - components/CommentVoteButtons.tsx — BARU (client): panah naik/turun ringkas per komentar (pola VoteButtons: optimistic, klik ulang = batal, pulih saat gagal, skor terbaru dari hasil server), panggil setVoteComment; props `{ commentId, initialScore?, initialMyVote?, isLoggedIn?, disabled? }`.
+  - components/SettingsForm.tsx — BARU (client): bio n/200, ImagePicker `single` + uploadAvatar saat pilih (pratinjau seketika dari object URL ImagePicker), hapus avatar → kirim avatarUrl "" ; Simpan → updateProfile({ bio, avatarUrl? }) → "Tersimpan" + router.refresh().
+  - components/PostGallery.tsx — BARU (client): kisi foto detail (1 foto = aspect 16/9, 2–4 = grid), klik → overlay fixed (Escape/klik latar/tombol × menutup, scroll latar dikunci), TANPA dependensi. (File tambahan di luar daftar milik awal — dibutuhkan tugas 2 karena halaman /p/[id] adalah Server Component; lihat catatan di bawah.)
+  - components/PostCard.tsx — DIUBAH: thumbnail foto pertama (aspect-[16/9], object-cover, lazy) bila post.images ada; PostMenu absolut di pojok kanan atas; kartu kini wrapper div + Link konten (menu tidak lagi di dalam anchor — lebih bersih daripada trik stopPropagation saja); fokus papan tuts memakai focus-within di wrapper.
+  - components/CommentTree.tsx — DIUBAH: tiap komentar non-terhapus mendapat CommentVoteButtons (kiri) + PostMenu targetType "comment" (kanan); prop baru `dinonaktifkan?: boolean` (vote & Balas nonaktif untuk akun disuspend — sebelumnya isLoggedIn mencampur dua hal).
+  - components/SubmitPostForm.tsx — DIUBAH: seksi foto ImagePicker (max 4, disabled saat submit/nonaktif), state files + paths paralel per posisi, alur Kirim = unggah yang belum punya path (progres "Mengunggah foto i/n...") → createPost({ ..., images: paths }) ("Menyimpan post..."); error foto inline (isFotoError → e.message, selain itu extractErrorCode; kode FORBIDDEN/RLS_DENIED saat upload → PESAN_AKUN_BARU_24JAM sesuai PRD 18.3.10); rollback deletePostImage (allSettled) saat createPost gagal (mengembalikan {ok:false} maupun melempar) dan path di-reset agar retry mengunggah ulang; prop baru `alasanFotoNonaktif?: string | null` (menonaktifkan picker + pesan, PRD 18.3.10).
+  - components/feed/types.ts — DIUBAH: helper bacaDaftarTeks; FeedPostView + PostDetailView dapat `images: string[]` (fallback [], kandidat images/foto/postImages/post_images); FeedPostView dapat `authorAvatar`; CommentView dapat `isMine` + `myVote`; toCommentList kini menerima bentuk DATAR comments_view (parent_id) dan menyusun pohon (urutan server dipertahankan; balasan tanpa induk naik ke akar) — bentuk bersarang (children/replies) tetap didukung, komponen lama tidak berubah perilaku kontrak.
+  - app/(main)/p/[id]/page.tsx — DIUBAH (di luar daftar milik awal, tapi diminta eksplisit oleh tugas 2 & 3): PostMenu di header (isMine), PostGallery di bawah isi, CommentTree kini menerima isLoggedIn={sudahMasuk} + dinonaktifkan terpisah.
+  - app/(main)/u/[username]/page.tsx — BARU: header profil (Avatar lg + username + bio milik sendiri dari sesi + "Aktivitas terakhir" dari post pertama + tombol "Ubah profil" bila profil sendiri) + FeedList mode username (empty state "Belum ada postingan"); generateMetadata `Profil @username`; dynamic = "force-dynamic".
+  - app/(main)/settings/page.tsx — BARU: redirect /login bila tamu (pola ambilSesi), render SettingsForm (username/bio/avatar dari sesi) + kartu arahan ganti password ke /reset.
+  - app/legal/rules/page.tsx — BARU: halaman statis aturan komunitas, teks 8 butir PRD 28.1 disalin utuh dalam Card + catatan cara melapor; tautan "← Kembali" ke "/". PENTING: app/legal dijadwalkan milik DEVOPS untuk terms/privacy — rules ini dibuat duluan karena dibutuhkan banner (rulesHref default "/rules" di AccountStatusBanner); JANGAN dipindah/dihapus tanpa koordinasi.
+  - docs/handoff/FASE4-FRONTEND.md (file ini). TIDAK disentuh: lib/**, app/admin/**, components/ReportDialog.tsx, components/ImagePicker.tsx, lib/image/**, components/ui/**, supabase/**, docs/PROGRESS.md, app/(main)/submit/page.tsx, app/(main)/layout.tsx.
+
+- **Kontrak yang disediakan** (dipakai fase berikutnya / agent lain):
+  - components/PostMenu.tsx: `<PostMenu targetType={"post"|"comment"} targetId isMine? />` — client; aman di dalam maupun di luar Link.
+  - components/CommentVoteButtons.tsx: `<CommentVoteButtons commentId initialScore? initialMyVote? isLoggedIn? disabled? />`.
+  - components/PostGallery.tsx: `<PostGallery images={string[]} title? />` — kosong → render null.
+  - components/SettingsForm.tsx: `<SettingsForm username initialBio initialAvatarUrl />`.
+  - types.ts: `FeedPostView.images: string[]`, `FeedPostView.authorAvatar: string | null`, `CommentView.isMine: boolean`, `CommentView.myVote: number` (toCommentList menerima flat ATAU bersarang).
+  - Halaman aktif: /u/[username], /settings, /rules (+ fitur lapor/hapus/foto/vote komentar di /, /c/[slug], /p/[id], /submit).
+
+- **Yang dibutuhkan dari agent lain**:
+  - MOD-AGENT/paralel: `@/components/ReportDialog` (kontrak `<ReportDialog targetType targetId open onClose onReported? />`) — selama file itu belum ada, `next build` error "Cannot find module '@/components/ReportDialog'"; itu diharapkan (pola paralel Fase 3–4), bukan bug. File saya tidak menyentuh ReportDialog.tsx miliknya.
+  - BACKEND-AGENT: SessionProfile (getSessionUser) belum menyertakan `createdAt` dan belum ada aksi baca profil ORANG LAIN (getProfileByUsername) — karena itu /u/[username] hanya bisa menampilkan bio/avatar milik sendiri, avatar pengguna lain diambil dari post pertamanya di feed, dan "tanggal gabung" BELUM tampil (slot UI siap). Mohon tambahkan minimal `createdAt` di SessionProfile (dan idealnya getProfileByUsername → { username, bio, avatarUrl, createdAt }) agar header profil lengkap; /settings juga akan otomatis menampilkan avatar terbaru setelah refresh sesi.
+  - BACKEND-AGENT: kode IMAGE_LIMIT belum ada di lib/errors.ts (MEDIA menyiapkan FOTO_LIMIT untuk UI) — batas 4 foto saya jaga di UI (ImagePicker max=4) dan backend tetap menolak IMAGE_INVALID; aman.
+  - /submit page (app/(main)/submit/page.tsx, milik umum/orchestrator): bila nanti SessionProfile menyertakan createdAt, tolong kirim `alasanFotoNonaktif` ke SubmitPostForm untuk akun < 24 jam (PRD 18.3.10) — prop sudah tersedia; tanpa itu, penolakan storage tetap menampilkan pesan 24 jam yang jelas saat Kirim.
+  - ORCHESTRATOR: `npm install` (browser-image-compression milik BACKEND) lalu `npm run build` setelah semua file paralel (khususnya ReportDialog) terkumpul.
+
+- **Asumsi / keputusan**:
+  1. Kompres foto TIDAK dipanggil terpisah dari /submit: `uploadPostImage(file)` sudah memanggil `compressImage` di dalamnya (kontrak & contoh integrasi resmi MEDIA-AGENT); memanggil compressImage dulu baru upload berarti kompres ganda (kualitas & waktu terbuang). Progres per foto tetap tampil sesuai permintaan.
+  2. Retry foto per posisi: `paths: (string|null)[]` paralel dengan `files`; ganti daftar foto di picker memetakan ulang path berdasar identitas objek File, jadi foto yang sudah sukses tidak diunggah ulang (PRD 18.3.4). Bila createPost gagal, semua file hasil upload di-rollback (deletePostImage, allSettled — error hapus tidak menutup error asli) dan path di-reset; file yatim yang luput dibersihkan job mingguan (PRD 20.3).
+  3. Akun < 24 jam (PRD 18.3.10): sesi tidak membawa createdAt sehingga tombol foto TIDAK bisa dinonaktifkan preventif dari UI saat ini. Penanganan: error upload dengan kode FORBIDDEN/RLS_DENIED (storage menolak lewat policy 24 jam) menampilkan pesan khusus yang jelas, dan prop `alasanFotoNonaktif` disiapkan untuk halaman /submit begitu datanya ada. Pemetaan RLS_DENIED→pesan 24 jam aman karena akun disuspend sudah diblokir di level form (alasanNonaktif, Kirim nonaktif).
+  4. PostCard direstrukturisasi dari "satu Link penuh" menjadi wrapper div + Link konten + menu absolut: button di dalam anchor itu HTML tidak valid dan rawan navigasi tak terduga; kini hanya area konten yang menavigasi, klik menu tidak pernah membuka post. Perilaku visual (hover, fokus) dipertahankan.
+  5. "Hapus" memakai confirm ringan dua langkah DI DALAM menu (klik Hapus → "Hapus post/komentar ini?" → "Ya, hapus"/Batal) alih-alih window.confirm — konsisten gaya UI tanpa dependensi, tetap satu ketukan ekstra sesuai makna "confirm ringan". Setelah sukses: router.refresh() (post hilang dari feed/detail; komentar menjadi "[komentar dihapus]" — soft delete).
+  6. Vote komentar ditulis sebagai komponen baru (CommentVoteButtons) agar VoteButtons (post) tidak berubah perilaku — duplikasi kecil disengaja, pola optimistic identik (simpan nilai lama → pulihkan saat gagal, PRD 18.5.2); skor null dari server diabaikan (kembali ke nilai optimistic, sesuai komentar kontrak VoteState).
+  7. Komentar datar disusun pohon di normalizer (bukan di CommentTree) agar komponen lama dan pemanggil lain tetap menerima `children`; urutan server (skor desc, waktu asc) dipertahankan apa adanya — tidak diurut ulang di klien.
+  8. Profil: tanggal gabung diganti "Aktivitas terakhir <waktu post pertama>" sementara data profil lain belum tersedia (lihat kebutuhan BACKEND di atas); bio hanya untuk profil sendiri; avatar pengguna lain diambil dari post pertama non-anonimnya (heuristik, dipindah ke getProfileByUsername begitu ada). Post anonim otomatis tidak muncul di feed username (penyaringan server, PRD 4.3).
+  9. /settings: avatar diunggah SEKETIKA saat dipilih (pratinjau tetap instan dari object URL ImagePicker); bila upload gagal, file tetap terpilih dan Simpan mencoba upload sekali lagi sebelum updateProfile; menghapus avatar lalu Simpan mengirim `avatarUrl: ""` (kontrak updateProfile: string kosong = hapus). Ganti password diarahkan ke alur /reset yang sudah ada (tidak ada kontrak update password langsung dari sesi di fase ini).
+  10. /rules berada di luar route group (main) sehingga tanpa header/bottom nav — disengaja (halaman legal statis ala terms/privacy yang akan ditempatkan DEVOPS di folder yang sama); punya tautan "← Kembali" sendiri.
+  11. File yang saya buat di luar daftar "BATASAN" milik awal (diperlukan tugas, dicatat agar tidak dianggap pelanggaran): app/(main)/p/[id]/page.tsx (diubah — diminta eksplisit tugas 2 & 3) dan components/PostGallery.tsx (baru — halaman detail adalah Server Component sehingga lightbox wajib client component terpisah). Tidak ada file lain di luar daftar yang disentuh.
+
+- **Cara memeriksa**:
+  1. Pastikan components/ReportDialog.tsx (MOD-AGENT) sudah ada, jalankan `npm install` lalu `npm run build` — harus lulus tanpa env asli (env lazy; semua pemanggilan data dibungkus aman).
+  2. /submit — pilih 5 foto → pesan "Maksimal 4 foto."; pratinjau & hapus per foto berfungsi; Kirim → "Mengunggah foto 1/2..." berubah "2/2..." lalu "Menyimpan post..." → diarahkan ke detail; matikan jaringan di tengah upload → pesan foto inline, kirim lagi → hanya foto gagal yang diunggah ulang; akun baru (<24 jam) → pesan 24 jam tampil jelas.
+  3. Feed — post berfoto menampilkan thumbnail 16:9; menu titik tiga: "Lapor" membuka dialog lapor (sukses → "Laporan terkirim."), post milik sendiri punya "Hapus" → confirm → kartu hilang setelah refresh; klik menu TIDAK membuka detail post.
+  4. /p/[id] — semua foto (maks 4) tampil di bawah isi, klik → perbesar (Escape/×/klik latar menutup); menu di header; tiap komentar punya panah vote (optimistic +1/−1, klik ulang batal, tamu → /login) dan menu (Lapor; Hapus bila milik sendiri); balasan tetap bersarang (kini benar dari data datar comments_view).
+  5. /u/[username] — header avatar+username (+bio di profil sendiri, tombol "Ubah profil"), feed milik pengguna, kosong → "Belum ada postingan"; BottomNav "Profil" mendarat di sini.
+  6. /settings — tamu dialihkan /login; pilih avatar → pratinjau seketika + "Mengunggah avatar..."; bio 201 karakter dicegah (counter n/200); Simpan → "Tersimpan" dan avatar di header ikut berganti (router.refresh); hapus avatar → Simpan → header kembali ke inisial.
+  7. Banner suspend (akun disuspend) → tautan "Baca aturan" mendarat di /rules berisi 8 butir aturan PRD 28.1.

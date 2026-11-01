@@ -4,40 +4,30 @@ Diupdate oleh ORCHESTRATOR. Sumber kebenaran fitur: `docs/PRD.md`.
 
 ## Checklist fase
 
-- [x] Fase 1: Fondasi — kode selesai, Gerbang 1 parsial (menunggu kredensial Supabase untuk verifikasi DB)
-- [x] Fase 2: Akun — kode selesai, Gerbang 2 parsial (alur register/login perlu DB)
-- [x] Fase 3: Inti forum — kode selesai, Gerbang 3 parsial (feed/post/komentar/vote perlu DB)
-- [ ] Fase 4: Foto dan moderasi — berikutnya
+- [x] Fase 1: Fondasi — **Gerbang 1 LULUS** (migrasi live + uji RLS 17/17)
+- [x] Fase 2: Akun — kode selesai; alur siap diuji user di localhost
+- [x] Fase 3: Inti forum — kode selesai; alur siap diuji user di localhost
+- [ ] Fase 4: Foto dan moderasi — berikutnya (butuh: view statistik komunitas, aksi lapor/admin, upload foto)
 - [ ] Fase 5: Audit independen (QA)
 - [ ] Fase 6: Rilis (DevOps) — target user: hosting di domain chatasiquqe (my.id/web.id/biz.id) via Vercel
 
-## Status agent — Fase 2 & 3 (selesai)
+## Status infrastruktur
 
-| Agent | Tugas | Status |
-|---|---|---|
-| BACKEND | Fase 2: `lib/actions/auth.ts` (register/login/logout/reset/getSessionUser) + 10 kode error baru | selesai |
-| FRONTEND | Fase 2: `app/(auth)/*` (login, register, reset, reset/confirm) + `AccountStatusBanner` | selesai |
-| BACKEND | Fase 3: `lib/actions/{communities,posts,comments,votes}.ts` + `comment-tree.ts` + `validate.ts` | selesai |
-| FRONTEND | Fase 3: `app/(main)/*` (feed, komunitas, detail post, submit) + PostCard/VoteButtons/CommentTree | selesai |
+- Supabase live: `irmmdnipacvrcoospjcp` (region ap-northeast-2/Seoul, tier gratis). 4 migrasi diterapkan (tracked di `private.app_migrations`). Uji RLS **17 OK / 0 GAGAL**.
+- Kredensial lengkap di `.env.local` (tidak di-commit): URL, publishable key, secret key, CRON_SECRET terisi; `NEXT_PUBLIC_SITE_URL` masih localhost (ganti saat deploy).
+- 5 komunitas awal ter-seed: umum, curhat, jual-beli, teknologi, hobi. Pendaftar pertama otomatis admin tanpa kode undangan.
 
-## Perbaikan integrasi oleh ORCHESTRATOR (mismatch kontrak antar agent paralel)
+## Perbaikan integrasi oleh ORCHESTRATOR
 
-1. `components/CommentForm.tsx`: field `content` → `body` (kontrak `CreateCommentInput`).
-2. `components/SubmitPostForm.tsx`: field `content` → `body` (kontrak `CreatePostInput`).
-3. `components/VoteButtons.tsx`: `setVote({postId,value})` → wrapper `setVotePost(postId, value)`.
-4. `components/feed/server-data.ts`: `getCommunity` → `getCommunityBySlug`.
-
-## Gerbang
-
-- Build total: **LULUS** (Next 15.5.28 — 9 rute: /, /c/[slug], /p/[id], /submit, /login, /register, /reset, /reset/confirm, middleware OK).
-- Semua gerbang runtime (migrasi, RLS, alur akun, feed, vote) **menunggu kredensial Supabase** — satu-satunya penghalang.
+1. Kontrak antar agent Fase 3: `content`→`body` (CommentForm, SubmitPostForm), `setVote({...})`→`setVotePost(id, value)`, `getCommunity`→`getCommunityBySlug`.
+2. Harness uji RLS: SETUP dibungkus `BEGIN..COMMIT` eksplisit (satu query string = satu transaksi implisit; ROLLBACK skenario pertama ikut membatalkan SETUP — gejala palsu S6/S8) + promosi `rls_mod` jadi moderator. Database sendiri sehat.
 
 ## Hambatan terbuka
 
-- **Kredensial Supabase (Project URL, anon key, service role key) menunggu dari user.**
-- Node 18 → @supabase/supabase-js memberi warning deprecation (tidak fatal). Upgrade Node 20+ disarankan sebelum rilis.
-- Domain hosting: rekomendasi chatasiquqe.my.id (tercatat di OPEN_QUESTIONS no. 8).
+- Node 18 → warning deprecation @supabase/supabase-js; upgrade ke 20+ disarankan sebelum rilis.
+- Domain hosting: rekomendasi chatasiquqe.my.id (OPEN_QUESTIONS no. 8). Perlu akun Vercel (+ repo GitHub atau deploy CLI).
+- SMTP bawaan Supabase terbatas — sambungkan SMTP (PRD 23.3) sebelum mengundang pengguna banyak.
 
 ## Catatan sesi
 
-- 2026-11-01: Fase 1-3 selesai dikode dalam 1 sesi (5 gelombang agent paralel). Handoff FASE1-3 digabung ke HANDOFF.md. Dev server berjalan di background saat tidak sedang build (jangan jalankan `next build` dan `next dev` bersamaan — konflik `.next`).
+- 2026-11-01: Fase 1-3 dikode (5 gelombang agent paralel, build lulus). Gerbang 1 selesai penuh: migrasi live + 17/17 uji RLS. Handoff semua fase di HANDOFF.md. Dev server berjalan di background (jangan jalankan `next build` dan `next dev` bersamaan — konflik `.next`). Migrasi/uji ulang: `set "SUPA_DB_PASSWORD=..." && node scripts/run-migrations.mjs --tests`.

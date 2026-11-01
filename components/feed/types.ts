@@ -9,6 +9,9 @@
  *   - Nilai hilang selalu jatuh ke fallback aman ("" / 0 / null).
  *   - Komunitas bisa berupa string slug ATAU objek { slug, name }.
  *   - Penulis hilang / flag anonim → tampil sebagai "Anonim" (PRD 4.3).
+ *   - Fase 4: `images` (URL foto post, fallback []) dibaca; komentar diperkaya
+ *     `isMine` + `myVote` (vote komentar) dan daftar datar comments_view
+ *     (parent_id) disusun jadi pohon di klien (PRD 24 getComments).
  */
 
 type Rekam = Record<string, unknown>;
@@ -51,6 +54,17 @@ function jepitVote(nilai: number): number {
   return Math.max(-1, Math.min(1, Math.round(nilai)));
 }
 
+/**
+ * Baca daftar URL/path foto dari field `images` (Fase 4, PRD 25): array
+ * string — nilai lain / elemen bukan string diabaikan, fallback [].
+ */
+function bacaDaftarTeks(nilai: unknown): string[] {
+  if (!Array.isArray(nilai)) return [];
+  return nilai.filter(
+    (item): item is string => typeof item === "string" && item.length > 0,
+  );
+}
+
 // ============================================================
 // Post feed (kartu di beranda & halaman komunitas)
 // ============================================================
@@ -63,6 +77,8 @@ export interface FeedPostView {
   communityName: string | null;
   /** null → tampil sebagai "Anonim" (PRD 4.3). */
   authorName: string | null;
+  /** URL avatar penulis (view posts_feed); null untuk anonim/tidak ada. */
+  authorAvatar: string | null;
   isAnonymous: boolean;
   title: string;
   excerpt: string;
@@ -73,6 +89,8 @@ export interface FeedPostView {
   /** -1 | 0 | 1 dari view posts_feed (my_vote). */
   myVote: number;
   isMine: boolean;
+  /** URL publik foto post (maks 4, urut position — Fase 4). Kosong = tanpa foto. */
+  images: string[];
 }
 
 function bacaKomunitas(raw: unknown): { slug: string | null; name: string | null } {
@@ -114,6 +132,9 @@ export function toFeedPostView(raw: unknown): FeedPostView {
     communitySlug: komunitas.slug,
     communityName: komunitas.name ?? komunitas.slug,
     authorName: penulis.anonim ? null : penulis.name,
+    authorAvatar: penulis.anonim
+      ? null
+      : asTeks(baca(raw, ["authorAvatar", "author_avatar", "avatar"])),
     isAnonymous: penulis.anonim,
     title: asTeks(baca(raw, ["title", "judul"])) ?? "(tanpa judul)",
     excerpt:
@@ -126,6 +147,7 @@ export function toFeedPostView(raw: unknown): FeedPostView {
     editedAt: asTeks(baca(raw, ["editedAt", "edited_at"])),
     myVote: jepitVote(asAngka(baca(raw, ["myVote", "my_vote"]))),
     isMine: baca(raw, ["isMine", "is_mine"]) === true,
+    images: bacaDaftarTeks(baca(raw, ["images", "foto", "postImages", "post_images"])),
   };
 }
 
@@ -200,6 +222,8 @@ export interface PostDetailView {
   editedAt: string | null;
   myVote: number;
   isMine: boolean;
+  /** URL publik foto post (maks 4, urut position — Fase 4). Kosong = tanpa foto. */
+  images: string[];
 }
 
 export function toPostView(raw: unknown): PostDetailView {
@@ -221,6 +245,7 @@ export function toPostView(raw: unknown): PostDetailView {
     editedAt: asTeks(baca(raw, ["editedAt", "edited_at"])),
     myVote: jepitVote(asAngka(baca(raw, ["myVote", "my_vote"]))),
     isMine: baca(raw, ["isMine", "is_mine"]) === true,
+    images: bacaDaftarTeks(baca(raw, ["images", "foto", "postImages", "post_images"])),
   };
 }
 
@@ -250,6 +275,10 @@ export interface CommentView {
   body: string;
   createdAt: string | null;
   score: number;
+  /** true bagi penulis → menu titik tiga menampilkan "Hapus" (PRD 18.4.4). */
+  isMine: boolean;
+  /** -1 | 0 | 1 dari view comments_view (my_vote) — untuk vote komentar (PRD 4.5). */
+  myVote: number;
   children: CommentView[];
 }
 
@@ -263,21 +292,66 @@ export function toCommentView(raw: unknown): CommentView {
     body: asTeks(baca(raw, ["body", "content", "isi", "text"])) ?? "",
     createdAt: asTeks(baca(raw, ["createdAt", "created_at"])),
     score: asAngka(baca(raw, ["score", "skor"])),
+    isMine: baca(raw, ["isMine", "is_mine"]) === true,
+    myVote: jepitVote(asAngka(baca(raw, ["myVote", "my_vote"]))),
     children: Array.isArray(anak) ? anak.map(toCommentView) : [],
   };
 }
 
+/** Baca id komentar induk dari baris datar comments_view (null = komentar utama). */
+function idInduk(raw: unknown): string | null {
+  return asTeks(baca(raw, ["parentId", "parent_id", "induk"]));
+}
+
+/**
+ * Normalisasi daftar komentar menjadi pohon CommentView.
+ *
+ * Dua bentuk diterima (PRD 24 getComments: "lalu susun pohon di klien"):
+ * - Bersarang (sudah punya children/replies) → dipetakan langsung.
+ * - Datar (comments_view: parent_id, urut skor desc + waktu) → disusun jadi
+ *   pohon di sini sesuai urutan datang; balasan yang induknya tidak ada naik
+ *   ke akar agar tidak hilang.
+ */
 export function toCommentList(sumber: unknown): CommentView[] {
-  if (Array.isArray(sumber)) return sumber.map(toCommentView);
-  const rekam = asRekam(sumber);
-  if (!rekam) return [];
-  const dalam = asRekam(rekam.data) ?? rekam;
-  const kandidat =
-    (Array.isArray(rekam.comments) && rekam.comments) ||
-    (Array.isArray(rekam.items) && rekam.items) ||
-    (Array.isArray(dalam.comments) && dalam.comments) ||
-    (Array.isArray(dalam.items) && dalam.items);
-  return Array.isArray(kandidat) ? kandidat.map(toCommentView) : [];
+  const kandidat = (() => {
+    if (Array.isArray(sumber)) return sumber;
+    const rekam = asRekam(sumber);
+    if (!rekam) return null;
+    const dalam = asRekam(rekam.data) ?? rekam;
+    return (
+      (Array.isArray(rekam.comments) && rekam.comments) ||
+      (Array.isArray(rekam.items) && rekam.items) ||
+      (Array.isArray(dalam.comments) && dalam.comments) ||
+      (Array.isArray(dalam.items) && dalam.items) ||
+      null
+    );
+  })();
+  if (!kandidat) return [];
+
+  const adaBentukDatar =
+    kandidat.length > 0 &&
+    kandidat.some((item) => idInduk(item) !== null) &&
+    kandidat.every((item) => !baca(item, ["children", "replies", "balasan"]));
+  if (!adaBentukDatar) return kandidat.map(toCommentView);
+
+  const views = kandidat.map(toCommentView);
+  const menurutId = new Map<string, CommentView>();
+  for (const view of views) {
+    if (view.id) menurutId.set(view.id, view);
+  }
+  const akar: CommentView[] = [];
+  kandidat.forEach((raw, indeks) => {
+    const view = views[indeks];
+    const indukId = idInduk(raw);
+    const induk = indukId ? menurutId.get(indukId) : undefined;
+    if (induk && induk !== view) {
+      induk.children.push(view);
+    } else {
+      // Komentar utama, atau induknya tidak ada di daftar → tampil di akar.
+      akar.push(view);
+    }
+  });
+  return akar;
 }
 
 // ============================================================

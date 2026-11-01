@@ -48,6 +48,17 @@ export type ErrorCode =
   | "BODY_TOO_LONG" // isi post > 10.000 karakter (PRD 21)
   | "COMMENT_BODY_INVALID" // komentar bukan 1–5.000 karakter (PRD 21)
   | "VOTE_INVALID" // tipe/nilai vote tidak dikenal (PRD 24 setVote)
+  // Kode moderasi, foto, dan profil (Fase 4, BACKEND-AGENT): validasi cepat
+  // app + kode yang dilempar DB (TARGET_INVALID oleh RPC mod_apply_action).
+  | "REPORT_DUPLICATE" // laporan sama oleh user sama sudah ada (PRD 18.6.2)
+  | "REPORT_INVALID" // alasan/tipe target laporan tidak dikenal
+  | "TARGET_INVALID" // tipe target moderasi tidak dikenal (RPC 16.6)
+  | "IMAGE_INVALID" // foto tidak valid (bukan 1–4 path milik sendiri)
+  | "BIO_TOO_LONG" // bio > 200 karakter (PRD 21 / skema profiles)
+  | "AVATAR_INVALID" // URL avatar bukan URL publik bucket avatars
+  | "COMMUNITY_INVALID" // slug/nama komunitas tidak valid (dashboard admin)
+  | "COMMUNITY_SLUG_TAKEN" // slug komunitas sudah dipakai (unique)
+  | "INVITE_INPUT_INVALID" // max_uses/expires_at kode undangan tidak valid
   | "UNKNOWN"; // fallback
 
 export const ERROR_MESSAGES: Record<ErrorCode, string> = {
@@ -81,6 +92,15 @@ export const ERROR_MESSAGES: Record<ErrorCode, string> = {
   BODY_TOO_LONG: "Isi post maksimal 10.000 karakter.",
   COMMENT_BODY_INVALID: "Komentar harus 1–5.000 karakter.",
   VOTE_INVALID: "Nilai vote tidak dikenal.",
+  REPORT_DUPLICATE: "Kamu sudah melaporkan ini.",
+  REPORT_INVALID: "Pilihan alasan laporan tidak valid.",
+  TARGET_INVALID: "Target tindakan moderasi tidak dikenal.",
+  IMAGE_INVALID: "Foto tidak valid. Maksimal 4 foto per post.",
+  BIO_TOO_LONG: "Bio maksimal 200 karakter.",
+  AVATAR_INVALID: "URL avatar tidak valid. Unggah avatar melalui bucket avatars.",
+  COMMUNITY_INVALID: "Slug atau nama komunitas tidak valid.",
+  COMMUNITY_SLUG_TAKEN: "Slug komunitas sudah dipakai. Pilih slug lain.",
+  INVITE_INPUT_INVALID: "Data kode undangan tidak valid.",
   UNKNOWN: "Terjadi kesalahan. Coba lagi.",
 };
 
