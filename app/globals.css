@@ -1,0 +1,92 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ==========================================================================
+   Tema warna — PRD 22.5: gaya bersih, satu warna aksen, latar terang dan
+   gelap mengikuti pengaturan sistem (prefers-color-scheme, tanpa class toggle).
+
+   Nilai disimpan sebagai triplet HSL agar modifier opasitas Tailwind
+   (mis. bg-primary/10) tetap bekerja lewat `hsl(var(...) / <alpha-value>)`
+   pada tailwind.config.ts.
+   ========================================================================== */
+
+:root {
+  color-scheme: light;
+
+  /* Dasar */
+  --color-background: 210 40% 98%;
+  --color-foreground: 222 47% 11%;
+  --color-card: 0 0% 100%;
+  --color-card-foreground: 222 47% 11%;
+  --color-muted: 210 40% 94%;
+  --color-muted-foreground: 215 16% 45%;
+  --color-border: 214 32% 89%;
+
+  /* Warna aksen utama (biru) */
+  --color-primary: 221 83% 53%;
+  --color-primary-hover: 221 83% 45%;
+  --color-primary-foreground: 0 0% 100%;
+
+  /* Tombol sekunder */
+  --color-secondary: 214 32% 91%;
+  --color-secondary-hover: 214 30% 85%;
+  --color-secondary-foreground: 222 47% 20%;
+
+  /* Warna bahaya */
+  --color-danger: 0 72% 51%;
+  --color-danger-hover: 0 72% 42%;
+  --color-danger-foreground: 0 0% 100%;
+
+  /* Pelengkap untuk badge/status */
+  --color-success: 142 71% 30%;
+  --color-warning: 35 92% 33%;
+
+  /* Warna cincin fokus (aksesibilitas) */
+  --color-ring: 221 83% 53%;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+
+    --color-background: 222 30% 8%;
+    --color-foreground: 210 40% 96%;
+    --color-card: 222 26% 11%;
+    --color-card-foreground: 210 40% 96%;
+    --color-muted: 220 22% 15%;
+    --color-muted-foreground: 215 20% 65%;
+    --color-border: 218 18% 22%;
+
+    --color-primary: 217 91% 64%;
+    --color-primary-hover: 217 91% 72%;
+    --color-primary-foreground: 222 47% 11%;
+
+    --color-secondary: 219 20% 20%;
+    --color-secondary-hover: 219 20% 26%;
+    --color-secondary-foreground: 210 40% 92%;
+
+    --color-danger: 0 84% 62%;
+    --color-danger-hover: 0 84% 70%;
+    --color-danger-foreground: 0 0% 100%;
+
+    --color-success: 142 60% 45%;
+    --color-warning: 38 92% 55%;
+
+    --color-ring: 217 91% 64%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-background font-sans text-base text-foreground antialiased;
+  }
+}
