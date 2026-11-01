@@ -40,6 +40,14 @@ export type ErrorCode =
   | "PASSWORD_WEAK" // password < 8 karakter (PRD 21)
   | "PASSWORD_MISMATCH" // konfirmasi password tidak sama
   | "PASSWORD_SAME" // password baru sama dengan lama (auth Supabase)
+  // Kode alur konten (Fase 3, BACKEND-AGENT): tidak ada di tabel PRD 20;
+  // diperlukan untuk sesi dan validasi cepat PRD 21 (pola yang sama dengan
+  // kode alur auth Fase 2).
+  | "LOGIN_REQUIRED" // aksi data memerlukan sesi login
+  | "TITLE_INVALID" // judul post kosong atau > 200 karakter (PRD 21)
+  | "BODY_TOO_LONG" // isi post > 10.000 karakter (PRD 21)
+  | "COMMENT_BODY_INVALID" // komentar bukan 1–5.000 karakter (PRD 21)
+  | "VOTE_INVALID" // tipe/nilai vote tidak dikenal (PRD 24 setVote)
   | "UNKNOWN"; // fallback
 
 export const ERROR_MESSAGES: Record<ErrorCode, string> = {
@@ -68,6 +76,11 @@ export const ERROR_MESSAGES: Record<ErrorCode, string> = {
   PASSWORD_WEAK: "Password minimal 8 karakter.",
   PASSWORD_MISMATCH: "Konfirmasi password tidak sama dengan password baru.",
   PASSWORD_SAME: "Password baru sama dengan password lama.",
+  LOGIN_REQUIRED: "Kamu harus login untuk melakukan aksi ini.",
+  TITLE_INVALID: "Judul wajib diisi dan maksimal 200 karakter.",
+  BODY_TOO_LONG: "Isi post maksimal 10.000 karakter.",
+  COMMENT_BODY_INVALID: "Komentar harus 1–5.000 karakter.",
+  VOTE_INVALID: "Nilai vote tidak dikenal.",
   UNKNOWN: "Terjadi kesalahan. Coba lagi.",
 };
 
@@ -76,6 +89,14 @@ export interface AppError {
   code: ErrorCode;
   message: string;
 }
+
+/**
+ * Bentuk hasil standar semua server action data (PRD bagian 24): sukses
+ * `{ ok: true, data }`, gagal `{ ok: false, code, message }` ramah UI.
+ */
+export type ActionResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; code: ErrorCode; message: string };
 
 const KNOWN_CODES: ReadonlySet<string> = new Set<string>(
   Object.keys(ERROR_MESSAGES),
