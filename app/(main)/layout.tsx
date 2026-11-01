@@ -168,6 +168,21 @@ export default async function MainLayout({
       </main>
 
       <BottomNav username={sesi?.username || null} />
+
+      <footer className="border-t border-border py-6 text-center text-xs text-muted-foreground">
+        <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
+          <Link href="/legal/rules" className="hover:text-foreground">
+            Aturan Komunitas
+          </Link>
+          <Link href="/legal/terms" className="hover:text-foreground">
+            Syarat &amp; Ketentuan
+          </Link>
+          <Link href="/legal/privacy" className="hover:text-foreground">
+            Kebijakan Privasi
+          </Link>
+        </div>
+        <p className="mt-2">© {new Date().getFullYear()} Forum Komunitas</p>
+      </footer>
     </div>
   );
 }
