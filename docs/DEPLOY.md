@@ -1,6 +1,6 @@
-# Panduan Deploy (Fase 6) — Vercel + Domain chatasiquqe
+# Panduan Deploy (Fase 6) — Vercel + Domain chatasiqque
 
-Target: forum online di **chatasiquqe.my.id** (cadangan: web.id / biz.id) dengan hosting Vercel + database Supabase yang sudah live.
+Target: forum online di **chatasiqque.my.id** (cadangan: web.id / biz.id) dengan hosting Vercel + database Supabase yang sudah live.
 
 ## Ringkasan urutan
 
@@ -41,20 +41,20 @@ git push -u origin main
 - Daftar akun baru dengan kode undangan → email konfirmasi masuk → login.
 - Login admin → `/admin` normal.
 
-## E. Domain chatasiquqe.my.id
+## E. Domain chatasiqque.my.id
 
-1. **indo.domains** → Domain Saya → **Kelola** di `chatasiquqe.my.id` → menu **DNS**:
+1. **indo.domains** → Domain Saya → **Kelola** di `chatasiqque.my.id` → menu **DNS**:
    - Record **A**: Name `@` → Value `76.76.21.21` → TTL default.
    - Record **CNAME**: Name `www` → Value `cname.vercel-dns.com`.
-2. **Vercel** → Project → **Settings → Domains** → **Add** → `chatasiquqe.my.id` → ulangi untuk `www.chatasiquqe.my.id` (redirect ke domain utama).
+2. **Vercel** → Project → **Settings → Domains** → **Add** → `chatasiqque.my.id` → ulangi untuk `www.chatasiqque.my.id` (redirect ke domain utama).
 3. Tunggu propagasi (menit–jam). Vercel otomatis menerbitkan HTTPS.
 
 ## F. Konfigurasi pasca-domain (wajib)
 
 1. **Supabase** → Authentication → URL Configuration:
-   - **Site URL**: `https://chatasiquqe.my.id`
-   - **Redirect URLs**: tambahkan `https://chatasiquqe.my.id/**` dan `https://<nama>.vercel.app/**` (biarkan `http://localhost:3000/**` untuk dev).
-2. **Vercel** → Settings → Environment Variables → ubah `NEXT_PUBLIC_SITE_URL` menjadi `https://chatasiquqe.my.id` → **Redeploy** (wajib agar tautan verifikasi/reset email memakai domain final).
+   - **Site URL**: `https://chatasiqque.my.id`
+   - **Redirect URLs**: tambahkan `https://chatasiqque.my.id/**` dan `https://<nama>.vercel.app/**` (biarkan `http://localhost:3000/**` untuk dev).
+2. **Vercel** → Settings → Environment Variables → ubah `NEXT_PUBLIC_SITE_URL` menjadi `https://chatasiqque.my.id` → **Redeploy** (wajib agar tautan verifikasi/reset email memakai domain final).
 
 ## G. SMTP (PRD 23.3) — sebelum mengundang banyak orang
 

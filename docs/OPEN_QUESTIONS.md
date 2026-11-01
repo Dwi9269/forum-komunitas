@@ -14,4 +14,4 @@ Semua agent boleh menambah catatan di sini. Keputusan akhir tetap milik user.
 
 6. Kredensial Supabase (Project URL, anon key, service role key) — menunggu dari user. Sampai ada, migrasi hanya bisa ditulis, tidak dijalankan.
 7. Node lokal v18 → diputuskan memakai Next 15 + Tailwind v3.4 (Tailwind v4 butuh Node 20+). Jika user meng-upgrade Node ke 20+, migrasi Tailwind v4 bisa dilakukan belakangan.
-8. Domain hosting (dari user, 2026-11-01): tiga domain aktif di indo.domains sampai 2027-11-01 — chatasiquqe.biz.id, chatasiquqe.web.id, chatasiquqe.my.id. **Rekomendasi: chatasiquqe.my.id** (sesuai contoh PRD bagian 7), sisanya bisa jadi alias. Menunggu konfirmasi user.
+8. Domain hosting (dari user, 2026-11-01): tiga domain aktif di indo.domains sampai 2027-11-01 — chatasiqque.biz.id, chatasiqque.web.id, chatasiqque.my.id. **Rekomendasi: chatasiqque.my.id** (sesuai contoh PRD bagian 7), sisanya bisa jadi alias. Menunggu konfirmasi user.
