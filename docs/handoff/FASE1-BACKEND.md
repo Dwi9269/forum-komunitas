@@ -1,0 +1,26 @@
+## [FASE 1] BACKEND-AGENT -> ORCHESTRATOR
+
+- Selesai: scaffold Next.js 15 App Router tanpa create-next-app — package.json (next ^15.5.4, react ^19, TS ^5, Tailwind ^3.4.14 + postcss ^8.4 + autoprefixer ^10), tsconfig strict + alias @/*, next.config.ts, postcss.config.mjs (format v3), .gitignore, .env.local (nama variabel persis PRD 23.2, placeholder berkomentar), middleware.ts sesi Supabase (pola updateSession, matcher non-statis), lib/supabase client/server/middleware (env lazy, tidak throw saat import, cookies async Next 15), lib/errors.ts (union kode + peta pesan Indonesia PRD 20 + ekstraksi "(CODE) detail"), lib/actions/index.ts placeholder Fase 2-3.
+- File yang dibuat/diubah:
+  - package.json
+  - tsconfig.json
+  - next.config.ts
+  - postcss.config.mjs
+  - .gitignore
+  - .env.local
+  - middleware.ts
+  - lib/supabase/client.ts
+  - lib/supabase/server.ts
+  - lib/supabase/middleware.ts
+  - lib/errors.ts
+  - lib/actions/index.ts
+- Kontrak yang disediakan:
+  - lib/supabase/client.ts → `createClient(): SupabaseClient` — klien browser (createBrowserClient, singleton per tab); env dibaca lazy; throw hanya bila dipanggil tanpa env.
+  - lib/supabase/server.ts → `createClient(): Promise<SupabaseClient>` — klien Server Component/Action/Route Handler, cookies() async Next 15, RLS aktif; env lazy.
+  - lib/supabase/middleware.ts → `updateSession(request): Promise<UpdateSessionResult>` dengan `UpdateSessionResult = { response: NextResponse; user: User | null }` — refresh cookie sesi; tidak pernah throw.
+  - middleware.ts → `middleware(request): Promise<NextResponse>` (return `response` dari updateSession) + `config.matcher` yang mengecualikan _next/static, _next/image, favicon, gambar, font, aset publik; tanpa redirect paksa.
+  - lib/errors.ts → `ErrorCode` (union 13 kode), `ERROR_MESSAGES: Record<ErrorCode, string>`, `interface AppError { code: ErrorCode; message: string }`, `appError(code): AppError`, `isErrorCode(v): v is ErrorCode`, `extractErrorCode(error: unknown): AppError` (deteksi "(CODE) detail", prefix "CODE ...", SQLSTATE 42501 / row-level security → RLS_DENIED, ciri jaringan → NETWORK, sisanya UNKNOWN).
+  - lib/actions/index.ts → hanya komentar panduan (export {}); aksi Fase 2-3: auth.ts, posts.ts, comments.ts, votes.ts, reports.ts, admin.ts.
+- Yang dibutuhkan dari agent lain: kredensial Supabase asli dari user (NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, CRON_SECRET, NEXT_PUBLIC_SITE_URL) untuk mengganti placeholder di .env.local; FRONTEND-AGENT memakai createClient dari lib/supabase dan extractErrorCode dari lib/errors.ts; DB-AGENT wajib melempar error database dengan format `(KODE) detail` via `raise exception` agar extractErrorCode mengenalinya (kode persis sesuai tabel PRD 20).
+- Asumsi / keputusan: tailwindcss/postcss/autoprefixer diletakkan di dependencies sesuai instruksi orchestrator (bukan devDependencies); ACTION_INVALID dan NOT_FOUND dari kontrak PRD 24 ikut masuk union ErrorCode dengan pesan buatan (tidak ada di tabel PRD 20), demikian pula pesan UNKNOWN; tanpa app/ untuk sementara, `npm run build` belum menghasilkan halaman — build valid setelah FRONTEND-AGENT menambahkan app/layout.tsx + app/page.tsx; tidak membuat klien service-role (PRD 24: hanya cron, dibuat saat Fase /api/cron/cleanup); .gitignore menutup .env dan .env*.local sehingga .env.local tidak akan ter-commit.
+- Cara memeriksa: npm install lalu npm run build

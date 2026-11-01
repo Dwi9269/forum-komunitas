@@ -1,0 +1,22 @@
+## [FASE 1] FRONTEND-AGENT -> ORCHESTRATOR
+- Selesai: kerangka UI dasar mobile-first — layout root (lang="id", metadata, container max-w), tema warna terang/gelap otomatis mengikuti sistem (prefers-color-scheme) sesuai PRD 22.5, konfigurasi Tailwind CSS v3.4 (direktif klasik), halaman Beranda placeholder (header + tombol Masuk nonaktif + EmptyState feed), dan kit komponen UI dasar lengkap di components/ui (9 komponen, TypeScript, tanpa dependensi tambahan).
+- File yang dibuat/diubah: app/layout.tsx, app/globals.css, tailwind.config.ts, app/page.tsx, components/ui/Button.tsx, components/ui/Input.tsx, components/ui/Textarea.tsx, components/ui/Card.tsx, components/ui/Badge.tsx, components/ui/Avatar.tsx, components/ui/Spinner.tsx, components/ui/EmptyState.tsx, components/ui/ErrorState.tsx, docs/handoff/FASE1-FRONTEND.md
+- Kontrak yang disediakan:
+  - Button: `variant?: "primary"|"secondary"|"danger"` (default primary), `size?: "sm"|"md"|"lg"` (default md, tinggi 44 px), `loading?: boolean` (Spinner + disable otomatis), type default "button", mewarisi semua props `<button>` (termasuk ref).
+  - Input: `label?: string`, `error?: string` (teks merah + aria-invalid), sisa props `<input>`; id default dari `name`; tinggi 44 px.
+  - Textarea: `label?: string`, `error?: string`, sisa props `<textarea>`; id default dari `name`.
+  - Card: `padded?: boolean` (default true), sisa props `<div>`; latar card + border + rounded-xl.
+  - Badge: `variant?: "neutral"|"primary"|"success"|"warning"|"danger"` (default neutral), sisa props `<span>`.
+  - Avatar: `name: string` (wajib — sumber inisial/alt/warna), `src?: string|null` (tanpa gambar -> inisial dengan warna deterministik dari nama), `size?: "sm"|"md"|"lg"` (default md).
+  - Spinner: `size?: "sm"|"md"|"lg"` (default md), `label?: string` (aria, default "Memuat"); warna mengikuti currentColor.
+  - EmptyState: `title: string` (wajib), `description?: string`, `icon?: ReactNode` (default ikon inbox SVG inline), `action?: ReactNode`.
+  - ErrorState: `title?: string`, `message?: string`, `onRetry?: () => void` (bila ada -> tombol "Coba lagi").
+- Yang dibutuhkan dari agent lain: package.json dari BACKEND-AGENT harus memakai tailwindcss ^3.4 + postcss + autoprefixer (globals.css sudah memakai direktif klasik @tailwind — JANGAN tailwind v4), postcss.config.mjs standar Next+Tailwind, dan tsconfig.json dengan path alias "@/*". Tidak ada yang lain.
+- Asumsi / keputusan:
+  - Warna aksen tunggal: biru (terang HSL 221 83% 53%, gelap 217 91% 64%); mode gelap otomatis via media query prefers-color-scheme sesuai PRD 22.5, tanpa class toggle dan tanpa plugin.
+  - Variabel CSS disimpan sebagai triplet HSL + `hsl(var(...) / <alpha-value>)` di tailwind.config.ts agar modifier opasitas (mis. bg-primary/10) bekerja.
+  - Tanpa dependensi tambahan: ikon SVG inline gaya lucide, font stack sistem (tanpa next/font agar build tidak bergantung jaringan), Avatar memakai `<img>` biasa (ganti next/image nanti bila perlu).
+  - Tidak ada 'use client' di seluruh kit UI (semua komponen tanpa state internal); konsekuensinya: ErrorState.onRetry dan onClick pada komponen UI hanya boleh dipakai dari Client Component (Fase 2-3).
+  - tailwind.config.ts content: app + components + lib (glob lib defensif; tidak mengubah file lib milik BACKEND-AGENT).
+  - Rute /(main), /login, /submit, dst. sengaja belum dibuat (Fase 2-3); container max-w-5xl di layout root untuk mengakomodasi sidebar di layar lebar.
+- Cara memeriksa: npm run dev lalu buka http://localhost:3000
