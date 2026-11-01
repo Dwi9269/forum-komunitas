@@ -409,3 +409,14 @@ Format entri per skill `forum-multi-agent-builder` bagian 5. Selama fase berjala
   4. `/p/[id]` — vote klik naik +1, klik lagi kembali, klik turun berubah −2 (PRD 18.5.1); komentar bertingkat, Balas tersembunyi di kedalaman 3, komentar terhapus abu-abu; tamu melihat ajakan Masuk.
   5. `/submit` — tamu dialihkan /login; judul kosong → Kirim nonaktif; judul 201 karakter ditolak; isi >10.000 ditolak; sukses → diarahkan ke detail post.
   6. Cek juga header: tamu (Masuk/Daftar) vs login (avatar+username+Keluar), chip komunitas, dan bottom nav di layar sempit.
+
+# VERIFIKASI GERBANG 1 — ORCHESTRATOR (2026-11-01)
+
+## [GERBANG 1] ORCHESTRATOR -> SEMUA
+- Selesai: 4 migrasi diterapkan ke proyek Supabase live user (koneksi session pooler ap-northeast-2; progress tercatat di `private.app_migrations`). Uji RLS `supabase/tests/rls_checks.sql` dijalankan ulang: **17 OK, 0 GAGAL** — termasuk S6 (pemilik edit post sendiri), S8 (moderasi via RPC + post tersembunyi hilang dari feed), S9 (trigger skor vote), S10 (akun suspend tidak bisa menulis).
+- Perbaikan berkas uji (bug harness, bukan bug database):
+  1. SETUP kini dibungkus `BEGIN..COMMIT` eksplisit. Penyebab: runner/SQL Editor menjalankan seluruh berkas sebagai SATU transaksi implisit, sehingga `ROLLBACK` skenario pertama ikut membatalkan SETUP — gejala palsu: S6 "0 baris" dan S8 `FORBIDDEN`. (Bukti database sehat: trigger `on_auth_user_created` aktif; insert uji manual langsung membuat profil `active`/`member`.)
+  2. `rls_mod` diangkat menjadi moderator dalam SETUP (kebutuhan skenario 8 yang sebelumnya terlewat).
+- Verifikasi manual tambahan: default kolom `profiles.status='active'`, `role='member'` — alur registrasi di level database sehat.
+- Tool baru: `scripts/run-migrations.mjs` (migrasi idempoten + uji RLS), `scripts/exec-sql.mjs` (eksekusi SQL arbitrer). Kredensial SELALU lewat env `SUPA_DB_PASSWORD` — tidak pernah ditulis ke file; `pg` ditambahkan sebagai devDependency.
+- Yang dibutuhkan dari agent lain: tidak ada. DEVOPS (Fase 6): ingat set `NEXT_PUBLIC_SITE_URL` saat deploy dan aktifkan SMTP (PRD 23.3) sebelum undang pengguna.

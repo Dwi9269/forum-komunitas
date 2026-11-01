@@ -24,6 +24,12 @@
 -- ============================================================
 
 -- ============ SETUP DATA UJI (sebagai postgres, melewati RLS pemilik) ============
+-- PENTING: dibungkus BEGIN..COMMIT eksplisit. Bila seluruh berkas dijalankan
+-- sebagai satu query string (runner/SQL editor), PostgreSQL membungkusnya
+-- dalam SATU transaksi implisit; ROLLBACK skenario pertama akan ikut
+-- membatalkan SETUP. COMMIT di sini mengunci data uji sebelum skenario jalan.
+begin;
+
 insert into invite_codes (code, max_uses) values ('TESTKODE1', 10);
 
 insert into auth.users (id, aud, role, email, raw_user_meta_data, email_confirmed_at, created_at, updated_at) values
@@ -49,9 +55,14 @@ insert into posts (id, community_id, author_id, title, body) values
   ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
    '33333333-3333-3333-3333-333333333333','Post uji dari Budi','Isi post uji untuk pengujian RLS.');
 
+-- rls_mod diangkat jadi moderator (dipakai skenario 8)
+update profiles set role = 'moderator' where id = '22222222-2222-2222-2222-222222222222';
+
 -- Sari di-suspend 7 hari (dipakai skenario 10)
 update profiles set status = 'suspended', suspended_until = now() + interval '7 days'
   where id = '44444444-4444-4444-4444-444444444444';
+
+commit;
 
 -- ============ SKENARIO 1: anonim tidak bisa insert post ============
 begin;
