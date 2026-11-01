@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition, type FormEvent } from "react";
+import { createPortal } from "react-dom";
 import Button from "@/components/ui/Button";
 import Textarea from "@/components/ui/Textarea";
 import { report } from "@/lib/actions/reports";
@@ -125,7 +126,13 @@ export default function ReportDialog({
     });
   }
 
-  return (
+  // Portal ke document.body: dialog sering dipasang DI DALAM Link kartu post
+  // (lewat PostMenu) yang menelepon preventDefault pada setiap klik untuk
+  // mencegah navigasi kartu — bila dialog berada di bawahnya, preventDefault
+  // itu ikut membatalkan aksi bawaan klik: radio alasan tak bisa dipilih dan
+  // tombol kirim tidak menyubmit form. Dengan portal, dialog keluar dari DOM
+  // Link/pembungkus dan semua kontrol bekerja normal.
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-4 sm:items-center"
       onMouseDown={() => {
@@ -267,6 +274,7 @@ export default function ReportDialog({
           </form>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
