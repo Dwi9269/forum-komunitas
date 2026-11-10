@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Button from "@/components/ui/Button";
 import EmptyState from "@/components/ui/EmptyState";
 import ErrorState from "@/components/ui/ErrorState";
@@ -71,6 +71,15 @@ export default function FeedList({
   const [cursor, setCursor] = useState<string | null>(initialCursor);
   const [error, setError] = useState<string | null>(initialError);
   const [memuat, setMemuat] = useState(false);
+
+  // Sinkronkan ulang bila server mengirim data baru (router.refresh() setelah
+  // aksi moderasi seperti takedown) — tanpa ini, post yang baru disembunyikan/
+  // dihapus moderator tetap tertahan di state klien sampai reload penuh.
+  useEffect(() => {
+    setItems(initialItems);
+    setCursor(initialCursor);
+    setError(initialError);
+  }, [initialItems, initialCursor, initialError]);
 
   /** Muat halaman berikutnya; cursor null = mulai dari awal (retry). */
   async function muat(dariCursor: string | null) {
