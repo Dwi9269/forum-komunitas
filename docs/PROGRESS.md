@@ -22,7 +22,9 @@ Diupdate oleh ORCHESTRATOR. Sumber kebenaran fitur: `docs/PRD.md`.
 ## Sisa pekerjaan (opsional / lanjutan)
 
 - ~~Pencarian (PRD Pasca-MVP 15)~~ — **SELESAI 2026-11-11**: kotak cari di beranda (form GET), getFeed({ search }) + pagination konsisten, terverifikasi production.
-- Notifikasi + DM, peran moderator per komunitas, moderasi gambar otomatis, PWA+push, video (butuh R2/Pro dulu).
+- ~~Notifikasi (PRD Pasca-MVP 15)~~ — **SELESAI 2026-11-11**: migrasi 0008 (tabel + 3 trigger: komentar/balasan/upvote/status akun), lonceng + badge unread di header, halaman /notifikasi (klik = tandai dibaca + navigasi), markAll; 29 skenario RLS OK; E2E production terverifikasi (komentar coba1 → notifikasi admin → dibaca).
+- Notifikasi: badge header ter-update per render server (bukan realtime — cukup untuk MVP).
+- DM (Pasca-MVP 15) — belum; peran moderator per komunitas, moderasi gambar otomatis, PWA+push, video (butuh R2/Pro dulu) — belum.
 - Halaman legal `terms` & `privacy` (PRD 28) — `rules` sudah ada.
 - Cron `/api/cron/cleanup` (PRD 23.4) + vercel.json cron.
 - Temuan QA Rendah R-6/7/8/9/11/12 (tidak memblokir).
