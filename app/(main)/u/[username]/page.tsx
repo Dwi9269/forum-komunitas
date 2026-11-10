@@ -126,6 +126,7 @@ export default async function HalamanProfil({ params }: Params) {
         initialCursor={cursor}
         initialError={error}
         username={username}
+        viewerRole={sesi?.role ?? "member"}
         emptyTitle="Belum ada postingan"
         emptyDescription={
           profilSendiri

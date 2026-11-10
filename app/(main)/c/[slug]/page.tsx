@@ -32,6 +32,9 @@ export default async function HalamanKomunitas({
     ambilFeed({ communitySlug: slug }),
   ]);
   const sesi = sesiHasil.ok ? sesiHasil.data : null;
+  // Fase 6: role penampil untuk aksi takedown langsung di menu post
+  // (moderator/admin) — tamu/member tanpa aksi moderasi.
+  const viewerRole = sesi?.role ?? "member";
 
   const kembali = (
     <Link
@@ -111,6 +114,7 @@ export default async function HalamanKomunitas({
         initialError={errorFeed}
         communitySlug={komunitas.slug}
         showCommunity={false}
+        viewerRole={viewerRole}
         emptyTitle="Belum ada postingan di sini"
         emptyDescription="Jadilah yang pertama memposting di komunitas ini lewat tombol Buat Post!"
       />

@@ -6,6 +6,7 @@ import EmptyState from "@/components/ui/EmptyState";
 import ErrorState from "@/components/ui/ErrorState";
 import Spinner from "@/components/ui/Spinner";
 import PostCard from "@/components/PostCard";
+import { type ViewerRole } from "@/components/PostMenu";
 import { getFeed } from "@/lib/actions/posts";
 import { extractErrorCode } from "@/lib/errors";
 import {
@@ -46,6 +47,11 @@ export interface FeedListProps {
   emptyDescription?: string;
   /** Tampilkan badge komunitas pada kartu. */
   showCommunity?: boolean;
+  /**
+   * Role penampil (dari ambilSesi di halaman server) — diteruskan ke tiap
+   * PostCard; moderator/admin mendapat aksi takedown langsung di menu (Fase 6).
+   */
+  viewerRole?: ViewerRole;
 }
 
 export default function FeedList({
@@ -59,6 +65,7 @@ export default function FeedList({
   emptyTitle = "Belum ada postingan",
   emptyDescription = "Jadilah yang pertama membagikan sesuatu!",
   showCommunity = true,
+  viewerRole = "member",
 }: FeedListProps) {
   const [items, setItems] = useState<FeedPostView[]>(initialItems);
   const [cursor, setCursor] = useState<string | null>(initialCursor);
@@ -127,6 +134,7 @@ export default function FeedList({
           key={post.id || `post-${indeks}`}
           post={post}
           showCommunity={showCommunity}
+          viewerRole={viewerRole}
         />
       ))}
 

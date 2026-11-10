@@ -3,7 +3,7 @@
 import { useState } from "react";
 import CommentForm from "@/components/CommentForm";
 import CommentVoteButtons from "@/components/CommentVoteButtons";
-import PostMenu from "@/components/PostMenu";
+import PostMenu, { type ViewerRole } from "@/components/PostMenu";
 import { waktuRelatif, type CommentView } from "@/components/feed/types";
 
 /**
@@ -16,6 +16,8 @@ import { waktuRelatif, type CommentView } from "@/components/feed/types";
  *   nama/isi, tetapi balasan di bawahnya tetap terlihat (PRD 18.4.3).
  * - Fase 4: tiap komentar punya panah vote ringkas (optimistic, PRD 4.5)
  *   dan menu titik tiga (Lapor untuk semua; Hapus bila milik sendiri).
+ * - Fase 6: prop viewerRole diteruskan ke menu komentar — moderator/admin
+ *   mendapat aksi takedown langsung (Sembunyikan/Hapus) di tiap komentar.
  * - Semua teks dirender sebagai teks biasa — TANPA dangerouslySetInnerHTML.
  */
 
@@ -28,6 +30,11 @@ export interface CommentTreeProps {
   isLoggedIn: boolean;
   /** true → vote dinonaktifkan (akun disuspend, PRD 18.5.4). */
   dinonaktifkan?: boolean;
+  /**
+   * Role penampil (dari ambilSesi di halaman server) — moderator/admin
+   * mendapat aksi takedown langsung di menu tiap komentar (Fase 6).
+   */
+  viewerRole?: ViewerRole;
 }
 
 function ItemKomentar({
@@ -36,12 +43,14 @@ function ItemKomentar({
   depth,
   isLoggedIn,
   dinonaktifkan,
+  viewerRole,
 }: {
   postId: string;
   node: CommentView;
   depth: number;
   isLoggedIn: boolean;
   dinonaktifkan: boolean;
+  viewerRole: ViewerRole;
 }) {
   const [membalas, setMembalas] = useState(false);
   const bolehMembalas =
@@ -101,11 +110,13 @@ function ItemKomentar({
             )}
           </div>
 
-          {/* Menu titik tiga: Lapor untuk semua, Hapus bila milik sendiri. */}
+          {/* Menu titik tiga: Lapor untuk semua, Hapus bila milik sendiri,
+              + Sembunyikan/Hapus moderasi bila moderator/admin (Fase 6). */}
           <PostMenu
             targetType="comment"
             targetId={node.id}
             isMine={node.isMine}
+            viewerRole={viewerRole}
           />
         </div>
       )}
@@ -124,6 +135,7 @@ function ItemKomentar({
               depth={depth + 1}
               isLoggedIn={isLoggedIn}
               dinonaktifkan={dinonaktifkan}
+              viewerRole={viewerRole}
             />
           ))}
         </ul>
@@ -137,6 +149,7 @@ export default function CommentTree({
   comments,
   isLoggedIn,
   dinonaktifkan = false,
+  viewerRole = "member",
 }: CommentTreeProps) {
   if (comments.length === 0) {
     return (
@@ -156,6 +169,7 @@ export default function CommentTree({
           depth={1}
           isLoggedIn={isLoggedIn}
           dinonaktifkan={dinonaktifkan}
+          viewerRole={viewerRole}
         />
       ))}
     </ul>

@@ -30,6 +30,9 @@ export default async function DetailPostPage({
 
   const [hasil, sesiHasil] = await Promise.all([ambilPost(id), ambilSesi()]);
   const sesi = sesiHasil.ok ? sesiHasil.data : null;
+  // Fase 6: role penampil untuk aksi takedown langsung di menu post &
+  // komentar (moderator/admin) — tamu/member tanpa aksi moderasi.
+  const viewerRole = sesi?.role ?? "member";
 
   const kembali = (
     <Link
@@ -84,11 +87,13 @@ export default async function DetailPostPage({
             </Link>
           )}
           {/* Menu titik tiga: Lapor untuk semua, Hapus bila milik sendiri
-              (PRD 4.6 / 18.3.8). */}
+              (PRD 4.6 / 18.3.8), + Sembunyikan/Hapus moderasi bila
+              moderator/admin (Fase 6). */}
           <PostMenu
             targetType="post"
             targetId={post.id}
             isMine={post.isMine}
+            viewerRole={viewerRole}
           />
         </div>
       </div>
@@ -166,6 +171,7 @@ export default async function DetailPostPage({
           comments={comments}
           isLoggedIn={sudahMasuk}
           dinonaktifkan={dinonaktifkan}
+          viewerRole={viewerRole}
         />
       </section>
     </div>

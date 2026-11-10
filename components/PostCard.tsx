@@ -1,12 +1,17 @@
 import Link from "next/link";
 import Badge from "@/components/ui/Badge";
-import PostMenu from "@/components/PostMenu";
+import PostMenu, { type ViewerRole } from "@/components/PostMenu";
 import { waktuRelatif, type FeedPostView } from "@/components/feed/types";
 
 export interface PostCardProps {
   post: FeedPostView;
   /** Sembunyikan badge komunitas di halaman komunitas itu sendiri. */
   showCommunity?: boolean;
+  /**
+   * Role penampil (dari ambilSesi di halaman server) — moderator/admin
+   * mendapat aksi takedown langsung di menu titik tiga (Fase 6).
+   */
+  viewerRole?: ViewerRole;
 }
 
 function IkonPanahAtas() {
@@ -48,7 +53,8 @@ function IkonKomentar() {
  * Kartu post untuk feed (wireframe PRD 22.1): komunitas, penulis (atau
  * Anonim), waktu relatif, judul, cuplikan 2 baris, thumbnail foto pertama
  * (Fase 4, bila post punya foto), skor + jumlah komentar, dan menu titik
- * tiga (Lapor / Hapus bila milik sendiri).
+ * tiga (Lapor / Hapus bila milik sendiri; + Sembunyikan & Hapus moderasi
+ * bila viewerRole moderator/admin — Fase 6).
  * Seluruh kartu adalah satu Link ke detail — klik pada menu tidak ikut
  * membuka tautan (PostMenu memanggil preventDefault + stopPropagation).
  * Teks user dirender sebagai teks biasa (React default) — TANPA
@@ -57,6 +63,7 @@ function IkonKomentar() {
 export default function PostCard({
   post,
   showCommunity = true,
+  viewerRole = "member",
 }: PostCardProps) {
   const penulis = post.authorName ?? "Anonim";
   const fotoPertama = post.images?.[0];
@@ -118,7 +125,12 @@ export default function PostCard({
 
       {/* Menu titik tiga di pojok kanan atas kartu (wireframe 22.1). */}
       <div className="absolute right-2 top-2">
-        <PostMenu targetType="post" targetId={post.id} isMine={post.isMine} />
+        <PostMenu
+          targetType="post"
+          targetId={post.id}
+          isMine={post.isMine}
+          viewerRole={viewerRole}
+        />
       </div>
     </div>
   );

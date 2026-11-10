@@ -56,7 +56,11 @@ export default async function BerandaPage({
   const sort = bacaUrutan(sp);
 
   const sesiHasil = await ambilSesi();
-  const login = sesiHasil.ok && sesiHasil.data !== null;
+  const sesi = sesiHasil.ok ? sesiHasil.data : null;
+  const login = sesi !== null;
+  // Fase 6: role penampil untuk aksi takedown langsung di menu post
+  // (moderator/admin) — tamu/member tanpa aksi moderasi.
+  const viewerRole = sesi?.role ?? "member";
 
   // Pengguna login → hanya komunitas yang diikuti (PRD 18.2.1).
   // Tamu → tanpa onlyJoined (browsing publik; lihat catatan di atas).
@@ -128,6 +132,7 @@ export default async function BerandaPage({
           initialError={errorAwal}
           sort={sort}
           onlyJoined={login ? true : undefined}
+          viewerRole={viewerRole}
           emptyTitle={
             login
               ? "Feed-mu masih kosong"
