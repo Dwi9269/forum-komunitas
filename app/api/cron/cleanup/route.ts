@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 /**
  * Cron pembersihan file yatim (PRD 23.4) — dijalankan mingguan oleh Vercel
@@ -8,13 +8,19 @@ import { createClient } from "@supabase/supabase-js";
  * Logika: bandingkan isi bucket dengan data yang terpakai
  * (post_images.storage_path + profiles.avatar_url), lalu hapus file yang
  * TIDAK terpakai dan lebih tua dari 24 jam — lewat Storage API, bukan SQL.
+ *
+ * File disimpan di path `{user_id}/{nama-file}`, jadi isi bucket harus
+ * ditelusuri sampai ke dalam subfolder (list("") hanya mengembalikan folder
+ * tingkat atas).
  */
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const BUCKET_POST_IMAGES = "post-images";
+const BUCKET_AVATARS = "avatars";
 const UMA = 24 * 60 * 60 * 1000; // 24 jam (ms)
+const PAGE = 1000;
 
 function adminClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -32,6 +38,82 @@ function pathDariUrlPublik(url: string, bucket: string): string | null {
   return i === -1 ? null : url.slice(i + penanda.length);
 }
 
+interface BerkasStorage {
+  /** Path lengkap di bucket, mis. `{user_id}/{uuid}.webp`. */
+  path: string;
+  createdAt: number | null;
+}
+
+/**
+ * Telusuri seluruh isi bucket (rekursif ke subfolder, dengan paginasi).
+ * Entri folder dari Storage API ditandai `id === null`.
+ */
+async function daftarSemuaBerkas(
+  supabase: SupabaseClient,
+  bucket: string,
+): Promise<BerkasStorage[]> {
+  const hasil: BerkasStorage[] = [];
+  const antrianFolder: string[] = [""];
+
+  while (antrianFolder.length > 0) {
+    const prefix = antrianFolder.pop() as string;
+    let offset = 0;
+    for (;;) {
+      const { data, error } = await supabase.storage.from(bucket).list(prefix, {
+        limit: PAGE,
+        offset,
+        sortBy: { column: "name", order: "asc" },
+      });
+      if (error) {
+        throw new Error(error.message);
+      }
+      for (const item of data ?? []) {
+        // Penanda folder kosong buatan dashboard — bukan file pengguna.
+        if (item.name.startsWith(".emptyFolderPlaceholder")) continue;
+        const path = prefix ? `${prefix}/${item.name}` : item.name;
+        if (item.id === null) {
+          antrianFolder.push(path);
+        } else {
+          const t = item.created_at ? new Date(item.created_at).getTime() : NaN;
+          hasil.push({ path, createdAt: Number.isFinite(t) ? t : null });
+        }
+      }
+      if (!data || data.length < PAGE) break;
+      offset += PAGE;
+    }
+  }
+  return hasil;
+}
+
+/** File yatim = tidak terpakai DAN umurnya jelas lebih dari 24 jam. */
+function pilihYatim(berkas: BerkasStorage[], terpakai: Set<string>): string[] {
+  const batas = Date.now() - UMA;
+  return berkas
+    .filter(
+      (f) =>
+        !terpakai.has(f.path) && f.createdAt !== null && f.createdAt < batas,
+    )
+    .map((f) => f.path);
+}
+
+/** Hapus dalam potongan agar permintaan tidak terlalu besar. */
+async function hapusBerkas(
+  supabase: SupabaseClient,
+  bucket: string,
+  paths: string[],
+): Promise<{ terhapus: number; error: string | null }> {
+  let terhapus = 0;
+  for (let i = 0; i < paths.length; i += 100) {
+    const potongan = paths.slice(i, i + 100);
+    const { error } = await supabase.storage.from(bucket).remove(potongan);
+    if (error) {
+      return { terhapus, error: error.message };
+    }
+    terhapus += potongan.length;
+  }
+  return { terhapus, error: null };
+}
+
 export async function GET(request: NextRequest) {
   const rahasia = process.env.CRON_SECRET;
   const otorisasi = request.headers.get("authorization");
@@ -39,7 +121,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  let supabase;
+  let supabase: SupabaseClient;
   try {
     supabase = adminClient();
   } catch (e) {
@@ -54,12 +136,14 @@ export async function GET(request: NextRequest) {
   const kesalahan: string[] = [];
 
   // ===== 1. Bucket post-images vs tabel post_images =====
-  const { data: daftarFile, error: errDaftar } = await supabase.storage
-    .from(BUCKET_POST_IMAGES)
-    .list("", { limit: 1000, sortBy: { column: "created_at", order: "asc" } });
-
-  if (errDaftar) {
-    return NextResponse.json({ error: errDaftar.message }, { status: 500 });
+  let berkasFoto: BerkasStorage[];
+  try {
+    berkasFoto = await daftarSemuaBerkas(supabase, BUCKET_POST_IMAGES);
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : "Gagal membaca bucket" },
+      { status: 500 },
+    );
   }
 
   const terpakaiFoto = new Set<string>();
@@ -68,78 +152,62 @@ export async function GET(request: NextRequest) {
     const { data, error } = await supabase
       .from("post_images")
       .select("storage_path")
-      .range(offset, offset + 999);
+      .order("id", { ascending: true })
+      .range(offset, offset + PAGE - 1);
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
     for (const baris of data ?? []) terpakaiFoto.add(baris.storage_path);
-    if (!data || data.length < 1000) break;
-    offset += 1000;
+    if (!data || data.length < PAGE) break;
+    offset += PAGE;
   }
 
-  const kandidatFoto = (daftarFile ?? [])
-    .filter(
-      (f) =>
-        !terpakaiFoto.has(f.name) &&
-        new Date(f.created_at ?? 0).getTime() < Date.now() - UMA,
-    )
-    .map((f) => f.name);
-
+  const kandidatFoto = pilihYatim(berkasFoto, terpakaiFoto);
   if (kandidatFoto.length > 0) {
-    const { error: errHapus } = await supabase.storage
-      .from(BUCKET_POST_IMAGES)
-      .remove(kandidatFoto);
-    if (errHapus) {
-      kesalahan.push(`post-images: ${errHapus.message}`);
-    } else {
-      terhapus += kandidatFoto.length;
-    }
+    const r = await hapusBerkas(supabase, BUCKET_POST_IMAGES, kandidatFoto);
+    terhapus += r.terhapus;
+    if (r.error) kesalahan.push(`post-images: ${r.error}`);
   }
 
   // ===== 2. Bucket avatars vs profiles.avatar_url =====
+  // Bila pembacaan profiles gagal, daftar "terpakai" tidak lengkap —
+  // JANGAN menghapus apa pun agar avatar yang sedang dipakai tidak hilang.
   const avatarsTerpakai = new Set<string>();
+  let profilLengkap = true;
   offset = 0;
   for (;;) {
     const { data, error } = await supabase
       .from("profiles")
       .select("avatar_url")
       .not("avatar_url", "is", null)
-      .range(offset, offset + 999);
+      .order("id", { ascending: true })
+      .range(offset, offset + PAGE - 1);
     if (error) {
       kesalahan.push(`profiles: ${error.message}`);
+      profilLengkap = false;
       break;
     }
     for (const baris of data ?? []) {
-      const path = pathDariUrlPublik(baris.avatar_url ?? "", "avatars");
+      const path = pathDariUrlPublik(baris.avatar_url ?? "", BUCKET_AVATARS);
       if (path) avatarsTerpakai.add(path);
     }
-    if (!data || data.length < 1000) break;
-    offset += 1000;
+    if (!data || data.length < PAGE) break;
+    offset += PAGE;
   }
 
-  const { data: daftarAvatar, error: errDaftarAvatar } = await supabase.storage
-    .from("avatars")
-    .list("", { limit: 1000, sortBy: { column: "created_at", order: "asc" } });
-
-  if (errDaftarAvatar) {
-    kesalahan.push(`avatars: ${errDaftarAvatar.message}`);
-  } else {
-    const kandidatAvatar = (daftarAvatar ?? [])
-      .filter(
-        (f) =>
-          !avatarsTerpakai.has(f.name) &&
-          new Date(f.created_at ?? 0).getTime() < Date.now() - UMA,
-      )
-      .map((f) => f.name);
-    if (kandidatAvatar.length > 0) {
-      const { error: errHapus } = await supabase.storage
-        .from("avatars")
-        .remove(kandidatAvatar);
-      if (errHapus) {
-        kesalahan.push(`avatars hapus: ${errHapus.message}`);
-      } else {
-        terhapus += kandidatAvatar.length;
+  if (profilLengkap) {
+    try {
+      const berkasAvatar = await daftarSemuaBerkas(supabase, BUCKET_AVATARS);
+      const kandidatAvatar = pilihYatim(berkasAvatar, avatarsTerpakai);
+      if (kandidatAvatar.length > 0) {
+        const r = await hapusBerkas(supabase, BUCKET_AVATARS, kandidatAvatar);
+        terhapus += r.terhapus;
+        if (r.error) kesalahan.push(`avatars hapus: ${r.error}`);
       }
+    } catch (e) {
+      kesalahan.push(
+        `avatars: ${e instanceof Error ? e.message : "gagal membaca bucket"}`,
+      );
     }
   }
 

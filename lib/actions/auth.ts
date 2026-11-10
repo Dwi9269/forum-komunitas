@@ -209,12 +209,19 @@ export async function login(formData: FormData): Promise<LoginResult> {
   }
 
   // Cek status profil sebelum menyerahkan sesi (PRD 18.1.6-7).
+  // Suspend yang sudah kedaluwarsa dianggap aktif — konsisten dengan
+  // is_active_user() di DB (audit pasca-rilis 2026-11-11); tanpa ini,
+  // akun terkunci sampai moderator me-restore manual.
   const profile = await fetchProfileRow(supabase, data.user.id);
   if (profile?.status === "banned") {
     await signOutQuietly(supabase);
     return toFailure(appError("ACCOUNT_BANNED"));
   }
-  if (profile?.status === "suspended") {
+  const suspendMasihBerlaku =
+    profile?.status === "suspended" &&
+    (!profile.suspended_until ||
+      new Date(profile.suspended_until).getTime() > Date.now());
+  if (suspendMasihBerlaku) {
     await signOutQuietly(supabase);
     return toFailure({
       code: "ACCOUNT_SUSPENDED",
@@ -386,10 +393,27 @@ async function fetchProfileRow(
       .select("username, role, status, suspended_until, avatar_url, bio, created_at")
       .eq("id", userId)
       .maybeSingle();
-    return (data as ProfileRow | null) ?? null;
+    return normalizeExpiredSuspension((data as ProfileRow | null) ?? null);
   } catch {
     return null;
   }
+}
+
+/**
+ * Suspend yang masa hukumannya sudah lewat diperlakukan sebagai aktif —
+ * selaras dengan public.is_active_user() di database. Tanpa ini akun tetap
+ * terkunci sampai moderator menjalankan "restore" manual, karena tidak ada
+ * job yang mengembalikan status ke "active".
+ */
+function normalizeExpiredSuspension(row: ProfileRow | null): ProfileRow | null {
+  if (!row || row.status !== "suspended" || !row.suspended_until) {
+    return row;
+  }
+  const until = new Date(row.suspended_until).getTime();
+  if (Number.isFinite(until) && until < Date.now()) {
+    return { ...row, status: "active", suspended_until: null };
+  }
+  return row;
 }
 
 function normalizeRole(value: string | null): UserRole {

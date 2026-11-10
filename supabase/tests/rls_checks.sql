@@ -30,7 +30,15 @@
 -- membatalkan SETUP. COMMIT di sini mengunci data uji sebelum skenario jalan.
 begin;
 
-insert into invite_codes (code, max_uses) values ('TESTKODE1', 10);
+-- Idempoten: aman dijalankan ulang bila run sebelumnya gagal di tengah jalan.
+insert into invite_codes (code, max_uses) values ('TESTKODE1', 10)
+  on conflict (code) do nothing;
+update invite_codes set used_count = 0, max_uses = 10, expires_at = null
+  where code = 'TESTKODE1';
+
+-- Database produksi sudah berisi pengguna nyata: matikan sementara syarat
+-- kode undangan agar pengguna uji bisa dibuat (dipulihkan di CLEANUP).
+update app_settings set value = 'false' where key = 'invite_required';
 
 insert into auth.users (id, aud, role, email, raw_user_meta_data, email_confirmed_at, created_at, updated_at) values
   ('11111111-1111-1111-1111-111111111111','authenticated','authenticated','rls-admin@test.local',
@@ -40,20 +48,24 @@ insert into auth.users (id, aud, role, email, raw_user_meta_data, email_confirme
   ('33333333-3333-3333-3333-333333333333','authenticated','authenticated','rls-budi@test.local',
    jsonb_build_object('username','rls_budi','invite_code','TESTKODE1'), now(), now(), now()),
   ('44444444-4444-4444-4444-444444444444','authenticated','authenticated','rls-sari@test.local',
-   jsonb_build_object('username','rls_sari','invite_code','TESTKODE1'), now(), now(), now());
+   jsonb_build_object('username','rls_sari','invite_code','TESTKODE1'), now(), now(), now())
+  on conflict (id) do nothing;
 
 insert into communities (id, slug, name, description) values
-  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','umum-rls','Umum (uji)','Komunitas khusus pengujian RLS');
+  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','umum-rls','Umum (uji)','Komunitas khusus pengujian RLS')
+  on conflict (id) do nothing;
 
 insert into community_members (community_id, user_id) values
   ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','11111111-1111-1111-1111-111111111111'),
   ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','22222222-2222-2222-2222-222222222222'),
   ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','33333333-3333-3333-3333-333333333333'),
-  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','44444444-4444-4444-4444-444444444444');
+  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','44444444-4444-4444-4444-444444444444')
+  on conflict (community_id, user_id) do nothing;
 
 insert into posts (id, community_id, author_id, title, body) values
   ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb','aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
-   '33333333-3333-3333-3333-333333333333','Post uji dari Budi','Isi post uji untuk pengujian RLS.');
+   '33333333-3333-3333-3333-333333333333','Post uji dari Budi','Isi post uji untuk pengujian RLS.')
+  on conflict (id) do nothing;
 
 -- rls_mod diangkat jadi moderator (dipakai skenario 8)
 update profiles set role = 'moderator' where id = '22222222-2222-2222-2222-222222222222';
@@ -273,7 +285,60 @@ begin
 end $$;
 rollback;
 
+-- ============ SKENARIO 11: penulis tidak bisa membatalkan hapusan moderator ============
+-- (audit pasca-rilis: grant update kolom is_deleted tidak membedakan arah;
+--  trigger 0007_protect_moderation_flags harus menolak true→false oleh penulis)
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"22222222-2222-2222-2222-222222222222","role":"authenticated"}';
+do $$
+declare v_komentar uuid;
+begin
+  -- budi menambah komentar selama post masih hidup
+  perform set_config('request.jwt.claims','{"sub":"33333333-3333-3333-3333-333333333333","role":"authenticated"}', true);
+  insert into comments (post_id, author_id, body)
+  values ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', auth.uid(), 'komentar uji undelete')
+  returning id into v_komentar;
+  raise notice 'OK S11a: penulis menambah komentar pada post';
+
+  -- moderator menghapus komentar via RPC
+  perform set_config('request.jwt.claims','{"sub":"22222222-2222-2222-2222-222222222222","role":"authenticated"}', true);
+  perform public.mod_apply_action('delete','comment', v_komentar, 'uji hapus komentar');
+  raise notice 'OK S11b: moderator menghapus komentar via RPC';
+
+  -- penulis coba undelete komentar → harus ditolak trigger
+  perform set_config('request.jwt.claims','{"sub":"33333333-3333-3333-3333-333333333333","role":"authenticated"}', true);
+  begin
+    update comments set is_deleted = false where id = v_komentar;
+    raise notice 'GAGAL S11c: penulis BISA membatalkan hapusan komentar';
+  exception
+    when others then
+      raise notice 'OK S11c: penulis tidak bisa membatalkan hapusan komentar -> %', sqlerrm;
+  end;
+
+  -- moderator menghapus post via RPC
+  perform set_config('request.jwt.claims','{"sub":"22222222-2222-2222-2222-222222222222","role":"authenticated"}', true);
+  perform public.mod_apply_action('delete','post','bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb','uji hapus moderator');
+  raise notice 'OK S11d: moderator menghapus post via RPC';
+
+  -- penulis coba undelete post → harus ditolak trigger
+  perform set_config('request.jwt.claims','{"sub":"33333333-3333-3333-3333-333333333333","role":"authenticated"}', true);
+  begin
+    update posts set is_deleted = false where id = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+    raise notice 'GAGAL S11e: penulis BISA membatalkan hapusan moderator';
+  exception
+    when others then
+      raise notice 'OK S11e: penulis tidak bisa membatalkan hapusan -> %', sqlerrm;
+  end;
+exception
+  when others then
+    raise notice 'GAGAL S11: %', sqlerrm;
+end $$;
+rollback;
+
 -- ============ CLEANUP (sebagai postgres) ============
+-- Pulihkan syarat kode undangan (dimatikan sementara di SETUP).
+update app_settings set value = 'true' where key = 'invite_required';
 -- Urutan penting: mod_actions/invite_codes menunjuk profiles tanpa ON DELETE.
 delete from mod_actions where moderator_id in (
   '11111111-1111-1111-1111-111111111111','22222222-2222-2222-2222-222222222222');
