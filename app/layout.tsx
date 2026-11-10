@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import "./globals.css";
 
@@ -9,6 +9,23 @@ export const metadata: Metadata = {
   },
   description:
     "Forum komunitas untuk berdiskusi, berbagi cerita, dan saling membantu sesama anggota.",
+  // PWA (Fase 6 — Pasca-MVP 15): manifest + ikon SVG + mode web-app iOS.
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "Forum",
+  },
+  icons: {
+    icon: [{ url: "/icon.svg", type: "image/svg+xml" }],
+    apple: [{ url: "/icon.svg" }],
+  },
+};
+
+// Next 15: themeColor (dan konfigurasi viewport) diekspor lewat `viewport`,
+// BUKAN lewat metadata. Warna gelap netral, senada manifest & tema aplikasi.
+export const viewport: Viewport = {
+  themeColor: "#0b0f1a",
 };
 
 export default function RootLayout({

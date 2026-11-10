@@ -5,6 +5,7 @@ import { getUnreadCount } from "@/lib/actions/notifications";
 import AccountStatusBanner from "@/components/AccountStatusBanner";
 import Avatar from "@/components/ui/Avatar";
 import BottomNav from "@/components/feed/BottomNav";
+import PwaRegister from "@/components/PwaRegister";
 import { ambilDaftarKomunitas, ambilSesi } from "@/components/feed/server-data";
 import { toCommunityViews } from "@/components/feed/types";
 
@@ -222,6 +223,11 @@ export default async function MainLayout({
       </main>
 
       <BottomNav username={sesi?.username || null} />
+
+      {/* PWA (Fase 6): registrasi service worker + banner install diskrit.
+          Fixed-position, tidak menggeser layout; sembunyi sendiri bila SW
+          tidak didukung / sudah terpasang / pernah ditutup. */}
+      <PwaRegister />
 
       <footer className="border-t border-border py-6 text-center text-xs text-muted-foreground">
         <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1">

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Forum Komunitas">
+  <!-- Ikon aplikasi PWA: gelembung chat putih + tiga titik di atas rounded-square
+       biru #3b82f6 (warna bg-primary tema). Bentuk gelembung meniru logo header
+       di app/layout.tsx & app/(main)/layout.tsx: path "M7.9 20A9 9 0 1 0 4 16.1L2 22Z".
+       Gelembung diskalakan 0.85 agar aman saat ikon dimasker (purpose "maskable")
+       dan tetap terbaca jelas di ukuran kecil. -->
+  <rect width="24" height="24" rx="5.2" fill="#3b82f6" />
+  <g transform="translate(12 12) scale(0.85) translate(-12 -12)">
+    <path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" fill="#ffffff" />
+    <circle cx="8" cy="12" r="1.4" fill="#3b82f6" />
+    <circle cx="12" cy="12" r="1.4" fill="#3b82f6" />
+    <circle cx="16" cy="12" r="1.4" fill="#3b82f6" />
+  </g>
+</svg>

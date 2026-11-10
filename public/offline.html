@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kamu offline — Forum Komunitas</title>
+    <style>
+      /* Tema gelap senada aplikasi: latar #0b0f1a, aksen biru #3b82f6. */
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; }
+      body {
+        margin: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: #0b0f1a;
+        color: #e5e7eb;
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, sans-serif;
+        text-align: center;
+      }
+      .kartu { max-width: 24rem; }
+      .ikon { display: block; width: 56px; height: 56px; margin: 0 auto; }
+      h1 { margin: 16px 0 8px; font-size: 1.25rem; color: #ffffff; }
+      p { margin: 4px 0; line-height: 1.6; color: #9ca3af; }
+      .pesan { color: #e5e7eb; }
+      .nama { margin-top: 20px; font-weight: 600; color: #e5e7eb; }
+      button {
+        margin-top: 20px;
+        display: inline-block;
+        border: 0;
+        border-radius: 8px;
+        background: #3b82f6;
+        color: #ffffff;
+        font-size: 0.9rem;
+        font-weight: 500;
+        padding: 10px 20px;
+        cursor: pointer;
+      }
+      button:hover { background: #2f76e8; }
+    </style>
+  </head>
+  <body>
+    <main class="kartu">
+      <svg class="ikon" viewBox="0 0 24 24" role="img" aria-label="Ikon Forum Komunitas">
+        <rect width="24" height="24" rx="5.2" fill="#3b82f6" />
+        <g transform="translate(12 12) scale(0.85) translate(-12 -12)">
+          <path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" fill="#ffffff" />
+          <circle cx="8" cy="12" r="1.4" fill="#3b82f6" />
+          <circle cx="12" cy="12" r="1.4" fill="#3b82f6" />
+          <circle cx="16" cy="12" r="1.4" fill="#3b82f6" />
+        </g>
+      </svg>
+      <h1>Kamu sedang offline</h1>
+      <p class="pesan">Periksa koneksi internetmu, lalu coba muat ulang halaman.</p>
+      <p class="nama">Forum Komunitas</p>
+      <button type="button" id="coba-lagi">Coba lagi</button>
+    </main>
+    <script>
+      // Tombol "Coba lagi" memuat ulang; halaman juga memuat ulang otomatis
+      // begitu koneksi kembali (event "online"). Vanilla JS, tanpa dependensi.
+      document.getElementById("coba-lagi").addEventListener("click", function () {
+        location.reload();
+      });
+      window.addEventListener("online", function () {
+        location.reload();
+      });
+    </script>
+  </body>
+</html>
