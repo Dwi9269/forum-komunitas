@@ -21,7 +21,8 @@ Diupdate oleh ORCHESTRATOR. Sumber kebenaran fitur: `docs/PRD.md`.
 
 ## Sisa pekerjaan (opsional / lanjutan)
 
-- SMTP sendiri (PRD 23.3) sebelum mengundang banyak orang — email bawaan Supabase dibatasi.
+- ~~Pencarian (PRD Pasca-MVP 15)~~ — **SELESAI 2026-11-11**: kotak cari di beranda (form GET), getFeed({ search }) + pagination konsisten, terverifikasi production.
+- Notifikasi + DM, peran moderator per komunitas, moderasi gambar otomatis, PWA+push, video (butuh R2/Pro dulu).
 - Halaman legal `terms` & `privacy` (PRD 28) — `rules` sudah ada.
 - Cron `/api/cron/cleanup` (PRD 23.4) + vercel.json cron.
 - Temuan QA Rendah R-6/7/8/9/11/12 (tidak memblokir).
