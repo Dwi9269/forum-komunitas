@@ -336,6 +336,140 @@ exception
 end $$;
 rollback;
 
+-- ============ SKENARIO 12a: notifikasi komentar (migrasi 0008) ============
+-- budi (3333) komentar di post miliknya sendiri -> TIDAK ada notifikasi
+-- (skip self-notify). Lalu moderator (2222) komentar di post 3333 ->
+-- tepat 1 notifikasi 'komentar' is_read=false untuk 3333.
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"33333333-3333-3333-3333-333333333333","role":"authenticated"}';
+do $$
+declare v_jml int; v_sesudah int;
+begin
+  -- budi komentar di post miliknya sendiri
+  insert into comments (post_id, author_id, body)
+  values ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', auth.uid(), 'komentar sendiri — tak boleh notif');
+
+  select count(*) into v_jml from public.notifications
+   where user_id = '33333333-3333-3333-3333-333333333333'
+     and tipe in ('komentar','balasan');
+  if v_jml = 0 then
+    raise notice 'OK S12a: komentar di post sendiri tidak menghasilkan notifikasi';
+  else
+    raise notice 'GAGAL S12a: komentar di post sendiri menghasilkan % notifikasi', v_jml;
+  end if;
+
+  -- moderator berkomentar di post budi
+  perform set_config('request.jwt.claims','{"sub":"22222222-2222-2222-2222-222222222222","role":"authenticated"}', true);
+  insert into comments (post_id, author_id, body)
+  values ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', auth.uid(), 'komentar moderator di post budi');
+
+  -- kembali ke identitas budi agar RLS select-own melihat notifikasinya
+  perform set_config('request.jwt.claims','{"sub":"33333333-3333-3333-3333-333333333333","role":"authenticated"}', true);
+  select count(*) into v_sesudah from public.notifications
+   where user_id = '33333333-3333-3333-3333-333333333333'
+     and tipe = 'komentar' and is_read = false;
+  if v_sesudah = 1 then
+    raise notice 'OK S12a: komentar moderator -> 1 notifikasi komentar (is_read=false) untuk budi';
+  else
+    raise notice 'GAGAL S12a: notifikasi komentar budi = % (seharusnya 1)', v_sesudah;
+  end if;
+end $$;
+rollback;
+
+-- ============ SKENARIO 12b: notifikasi vote (migrasi 0008) ============
+-- Upvote (value = 1) oleh moderator (2222) di post 3333 -> notifikasi
+-- 'vote_post' untuk 3333. Downvote (value = -1) tidak diberi notifikasi.
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"22222222-2222-2222-2222-222222222222","role":"authenticated"}';
+do $$
+declare v_jml int; v_jml2 int;
+begin
+  -- downvote dulu: TIDAK boleh ada notifikasi
+  insert into votes (user_id, target_type, target_id, value)
+  values (auth.uid(), 'post', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', -1);
+  select count(*) into v_jml from public.notifications
+   where user_id = '33333333-3333-3333-3333-333333333333' and tipe = 'vote_post';
+  if v_jml = 0 then
+    raise notice 'OK S12b: downvote tidak menghasilkan notifikasi';
+  else
+    raise notice 'GAGAL S12b: downvote menghasilkan % notifikasi vote_post', v_jml;
+  end if;
+
+  -- ganti ke upvote: insert votes (bukan update) -> notifikasi vote_post
+  delete from votes where user_id = auth.uid() and target_type = 'post'
+    and target_id = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+  insert into votes (user_id, target_type, target_id, value)
+  values (auth.uid(), 'post', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 1);
+
+  -- kembali ke identitas budi agar RLS select-own melihat notifikasinya
+  perform set_config('request.jwt.claims','{"sub":"33333333-3333-3333-3333-333333333333","role":"authenticated"}', true);
+  select count(*) into v_jml2 from public.notifications
+   where user_id = '33333333-3333-3333-3333-333333333333' and tipe = 'vote_post';
+  if v_jml2 = 1 then
+    raise notice 'OK S12b: upvote moderator -> notifikasi vote_post untuk budi';
+  else
+    raise notice 'GAGAL S12b: notifikasi vote_post budi = % (seharusnya 1)', v_jml2;
+  end if;
+end $$;
+rollback;
+
+-- ============ SKENARIO 12c: privasi + tulis notifikasi ============
+-- (1) user tidak bisa MEMBACA notifications milik orang lain (RLS menyaring,
+--     count = 0) meski barisnya benar ada; (2) pemilik melihat notifikasinya;
+--     (3) user tidak bisa INSERT langsung ke notifications (grant insert
+--     dicabut — baris hanya dibuat trigger security definer).
+begin;
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"22222222-2222-2222-2222-222222222222","role":"authenticated"}';
+do $$
+declare v_post uuid; v_lihat int; v_milik int;
+begin
+  -- moderator membuat post sendiri (target notifikasi uji)
+  insert into posts (community_id, author_id, title, body)
+  values ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', auth.uid(), 'Post mod untuk notifikasi', 'isi uji')
+  returning id into v_post;
+
+  -- budi berkomentar di post moderator -> trigger membuat notifikasi utk 2222
+  perform set_config('request.jwt.claims','{"sub":"33333333-3333-3333-3333-333333333333","role":"authenticated"}', true);
+  insert into comments (post_id, author_id, body)
+  values (v_post, auth.uid(), 'komentar budi di post moderator');
+
+  -- budi mencoba membaca notifications milik 2222 -> RLS menyaring (0 baris)
+  select count(*) into v_lihat from public.notifications
+   where user_id = '22222222-2222-2222-2222-222222222222';
+  if v_lihat = 0 then
+    raise notice 'OK S12c: user tidak bisa membaca notifications milik orang lain (0 baris)';
+  else
+    raise notice 'GAGAL S12c: user melihat % baris notifications milik orang lain', v_lihat;
+  end if;
+
+  -- pemilik (2222) tetap melihat notifikasinya sendiri
+  perform set_config('request.jwt.claims','{"sub":"22222222-2222-2222-2222-222222222222","role":"authenticated"}', true);
+  select count(*) into v_milik from public.notifications
+   where user_id = '22222222-2222-2222-2222-222222222222' and tipe = 'komentar';
+  if v_milik >= 1 then
+    raise notice 'OK S12c: pemilik melihat notifikasinya sendiri (% baris)', v_milik;
+  else
+    raise notice 'GAGAL S12c: pemilik seharusnya melihat notifikasinya (dapat %)', v_milik;
+  end if;
+
+  -- insert langsung ke notifications harus ditolak (grant insert dicabut)
+  begin
+    insert into notifications (user_id, actor_id, tipe)
+    values (auth.uid(), auth.uid(), 'komentar');
+    raise notice 'GAGAL S12c: user BISA insert notifications langsung';
+  exception
+    when insufficient_privilege then
+      raise notice 'OK S12c: insert langsung ke notifications ditolak -> %', sqlerrm;
+  end;
+exception
+  when others then
+    raise notice 'GAGAL S12c: %', sqlerrm;
+end $$;
+rollback;
+
 -- ============ CLEANUP (sebagai postgres) ============
 -- Pulihkan syarat kode undangan (dimatikan sementara di SETUP).
 update app_settings set value = 'true' where key = 'invite_required';

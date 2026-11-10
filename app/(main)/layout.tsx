@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { logout } from "@/lib/actions/auth";
+import { getUnreadCount } from "@/lib/actions/notifications";
 import AccountStatusBanner from "@/components/AccountStatusBanner";
 import Avatar from "@/components/ui/Avatar";
 import BottomNav from "@/components/feed/BottomNav";
@@ -27,6 +28,25 @@ function IkonBuat() {
     >
       <path d="M5 12h14" />
       <path d="M12 5v14" />
+    </svg>
+  );
+}
+
+/** Ikon lonceng notifikasi (SVG inline, tanpa dependensi). */
+function IkonLonceng() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-5 w-5"
+      aria-hidden="true"
+    >
+      <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+      <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
     </svg>
   );
 }
@@ -58,6 +78,19 @@ export default async function MainLayout({
       ? sesi.status
       : null;
 
+  // Badge notifikasi (Pasca-MVP 15): angka belum dibaca HANYA bila sesi ada.
+  // Layout force-dynamic → badge terhitung ulang di setiap navigasi. Kegagalan
+  // (env/RLS/jaringan) dianggap 0 agar header tidak pernah rusak.
+  let unread = 0;
+  if (sesi) {
+    try {
+      const unreadHasil = await getUnreadCount();
+      unread = unreadHasil.ok ? unreadHasil.data : 0;
+    } catch {
+      unread = 0;
+    }
+  }
+
   return (
     <div className="flex min-h-dvh flex-col">
       <header className="sticky top-0 z-20 border-b border-border bg-card">
@@ -88,6 +121,27 @@ export default async function MainLayout({
           </Link>
 
           <div className="flex items-center gap-2">
+            {/* Ikon lonceng notifikasi (Pasca-MVP 15) — hanya bila sesi ada;
+                badge angka belum dibaca dihitung di server tiap navigasi. */}
+            {sesi && (
+              <Link
+                href="/notifikasi"
+                aria-label={
+                  unread > 0
+                    ? `Notifikasi — ${unread} belum dibaca`
+                    : "Notifikasi"
+                }
+                className="relative inline-flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <IkonLonceng />
+                {unread > 0 && (
+                  <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[10px] font-semibold text-white">
+                    {unread > 9 ? "9+" : unread}
+                  </span>
+                )}
+              </Link>
+            )}
+
             {/* Tombol "+ Buat Post" (wireframe 22.1 / PRD 6) */}
             <Link
               href="/submit"
@@ -179,6 +233,9 @@ export default async function MainLayout({
           </Link>
           <Link href="/legal/privacy" className="hover:text-foreground">
             Kebijakan Privasi
+          </Link>
+          <Link href="/notifikasi" className="hover:text-foreground">
+            Notifikasi
           </Link>
         </div>
         <p className="mt-2">© {new Date().getFullYear()} Forum Komunitas</p>
