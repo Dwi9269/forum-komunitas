@@ -54,6 +54,8 @@ export default async function BerandaPage({
 }) {
   const sp = await searchParams;
   const sort = bacaUrutan(sp);
+  // Pencarian (PRD Pasca-MVP 15): cari di judul + isi via getFeed({ search }).
+  const cari = typeof sp.cari === "string" ? sp.cari.trim().slice(0, 100) : "";
 
   const sesiHasil = await ambilSesi();
   const sesi = sesiHasil.ok ? sesiHasil.data : null;
@@ -64,7 +66,11 @@ export default async function BerandaPage({
 
   // Pengguna login → hanya komunitas yang diikuti (PRD 18.2.1).
   // Tamu → tanpa onlyJoined (browsing publik; lihat catatan di atas).
-  const hasil = await ambilFeed(login ? { sort, onlyJoined: true } : { sort });
+  const hasil = await ambilFeed(
+    login
+      ? { sort, onlyJoined: true, search: cari || undefined }
+      : { sort, search: cari || undefined },
+  );
   const items = hasil.ok ? toFeedPosts(hasil.data) : [];
   const nextCursor = hasil.ok ? bacaCursor(hasil.data) : null;
   const errorAwal = hasil.ok ? null : hasil.message;
@@ -82,6 +88,30 @@ export default async function BerandaPage({
 
   return (
     <div className="flex flex-col gap-4">
+      {/* Kotak pencarian (PRD Pasca-MVP 15) — form GET murni, tanpa JS */}
+      {login && (
+        <form method="get" action="/" role="search" className="flex gap-2">
+          {sort === "hot" && (
+            <input type="hidden" name="urutan" value="populer" />
+          )}
+          <input
+            type="search"
+            name="cari"
+            defaultValue={cari}
+            maxLength={100}
+            placeholder="Cari post di komunitas yang kamu ikuti..."
+            aria-label="Cari post"
+            className="h-10 min-w-0 flex-1 rounded-lg border border-border bg-card px-3 text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+          <button
+            type="submit"
+            className="inline-flex h-10 shrink-0 items-center rounded-lg bg-secondary px-4 text-sm font-medium text-secondary-foreground transition-colors hover:bg-secondary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Cari
+          </button>
+        </form>
+      )}
+
       {/* Tab urutan (wireframe 22.1: [Terbaru] [Populer]) */}
       <nav aria-label="Urutan feed" className="flex gap-2">
         <Link
@@ -99,6 +129,20 @@ export default async function BerandaPage({
           Populer
         </Link>
       </nav>
+
+      {/* Status pencarian aktif */}
+      {cari && (
+        <p className="text-sm text-muted-foreground" aria-live="polite">
+          Hasil pencarian:{" "}
+          <span className="font-medium text-foreground">{cari}</span> ·{" "}
+          <Link
+            href={`/?urutan=${sort === "hot" ? "populer" : "terbaru"}`}
+            className="text-primary underline"
+          >
+            Bersihkan pencarian
+          </Link>
+        </p>
+      )}
 
       {loginDiperlukan ? (
         // Tamu: DB mencabut akses baca anon → ajakan masuk/daftar.
@@ -132,6 +176,7 @@ export default async function BerandaPage({
           initialError={errorAwal}
           sort={sort}
           onlyJoined={login ? true : undefined}
+          search={cari || undefined}
           viewerRole={viewerRole}
           emptyTitle={
             login

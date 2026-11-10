@@ -23,6 +23,8 @@ export interface ArgumenFeed {
   sort?: "new" | "hot";
   /** Hanya komunitas yang diikuti (PRD 18.2.1 — beranda pengguna login). */
   onlyJoined?: boolean;
+  /** Pencarian di judul + isi (PRD Pasca-MVP 15). */
+  search?: string;
 }
 
 export type HasilAman<T> =

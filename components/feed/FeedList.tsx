@@ -43,6 +43,8 @@ export interface FeedListProps {
    * "Muat lagi" agar halaman berikutnya konsisten dengan halaman pertama.
    */
   onlyJoined?: boolean;
+  /** Pencarian aktif (PRD Pasca-MVP 15) — dikirim ulang pada "Muat lagi". */
+  search?: string;
   emptyTitle?: string;
   emptyDescription?: string;
   /** Tampilkan badge komunitas pada kartu. */
@@ -62,6 +64,7 @@ export default function FeedList({
   username,
   sort = "new",
   onlyJoined,
+  search,
   emptyTitle = "Belum ada postingan",
   emptyDescription = "Jadilah yang pertama membagikan sesuatu!",
   showCommunity = true,
@@ -96,6 +99,7 @@ export default function FeedList({
         username,
         sort,
         onlyJoined,
+        search,
       };
       const hasil: unknown = await getFeed(args);
 
