@@ -605,7 +605,7 @@ export async function createPost(
     const urlVideoMentah = (input.videoUrl ?? "").trim();
     if (urlVideoMentah) {
       const sah =
-        urlVideoMentah.includes(".public.blob.vercelstorage.com") &&
+        urlVideoMentah.includes(".public.blob.vercel-storage.com") &&
         urlVideoMentah.includes(`videos/${user.id}/`);
       if (!sah) {
         console.warn(
