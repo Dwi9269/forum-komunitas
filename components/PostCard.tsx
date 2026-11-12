@@ -52,9 +52,11 @@ function IkonKomentar() {
 /**
  * Kartu post untuk feed (wireframe PRD 22.1): komunitas, penulis (atau
  * Anonim), waktu relatif, judul, cuplikan 2 baris, thumbnail foto pertama
- * (Fase 4, bila post punya foto), skor + jumlah komentar, dan menu titik
- * tiga (Lapor / Hapus bila milik sendiri; + Sembunyikan & Hapus moderasi
- * bila viewerRole moderator/admin — Fase 6).
+ * (Fase 4, bila post punya foto), indikator kecil "ada video" bila post
+ * punya video pendek (Fase 6, Pasca-MVP 15 — pemutar penuh hanya di detail),
+ * skor + jumlah komentar, dan menu titik tiga (Lapor / Hapus bila milik
+ * sendiri; + Sembunyikan & Hapus moderasi bila viewerRole moderator/admin —
+ * Fase 6).
  * Seluruh kartu adalah satu Link ke detail — klik pada menu tidak ikut
  * membuka tautan (PostMenu memanggil preventDefault + stopPropagation).
  * Teks user dirender sebagai teks biasa (React default) — TANPA
@@ -97,6 +99,15 @@ export default function PostCard({
           <p className="mt-1 line-clamp-2 whitespace-pre-line text-sm leading-relaxed text-muted-foreground">
             {post.excerpt}
           </p>
+        )}
+
+        {/* Indikator video (Fase 6, Pasca-MVP 15) — kartu TIDAK memutar video;
+            pemutar penuh ada di halaman detail. */}
+        {post.videoUrl && (
+          <span className="mt-2 inline-flex items-center gap-1 rounded-full border border-border bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground">
+            <span aria-hidden="true">🎬</span> Video
+            <span className="sr-only">— buka detail untuk memutar</span>
+          </span>
         )}
 
         {/* Thumbnail foto pertama (PRD 18.7, Fase 4) — sisanya di detail. */}

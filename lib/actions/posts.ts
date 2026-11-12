@@ -9,7 +9,8 @@
  * - Post HANYA dibaca lewat view `posts_feed` atau RPC `get_feed` — tabel
  *   `posts` mentah tidak pernah dibaca klien (tulis saja yang boleh, dan
  *   hanya kolom yang diberi grant: community_id/author_id/title/body/
- *   is_anonymous untuk insert, title/body/is_deleted untuk update).
+ *   is_anonymous/video_url untuk insert (0011), title/body/is_deleted untuk
+ *   update).
  * - Post anonim tidak membocorkan penulis: view sudah menyamarkan
  *   author_id/author_username/author_avatar menjadi null bila
  *   `is_anonymous`, sementara `is_mine` tetap benar bagi penulisnya agar
@@ -21,6 +22,11 @@
  *   EXIF di klien, PRD 25); file ini hanya menerima DAFTAR PATH di
  *   createPost lalu menyimpan relasi `post_images`, dan membaca foto untuk
  *   feed/detail sebagai URL publik. Upload tidak pernah dilakukan di server.
+ * - Video (Fase 6, Pasca-MVP 15): uploadVideo (lib/actions/media.ts)
+ *   mengunggah hasil kompres klien ke Vercel Blob `videos/{user_id}/{uuid}.ext`
+ *   dan menyerahkan URL-nya; createPost memvalidasi domain + folder milik
+ *   sendiri lalu menyimpannya ke posts.video_url SEKALI saat insert
+ *   (grant kolom migrasi 0011 — video tidak bisa diedit setelahnya).
  *
  * Pagination kursor: cursor = offset yang di-encode (base64url JSON),
  * opaque bagi klien. Filter (communitySlug/username/search/sort/onlyJoined)
@@ -72,6 +78,13 @@ export interface FeedPost {
    * Kosong bila post tanpa foto atau gagal memuat (bukan error feed).
    */
   images: string[];
+  /**
+   * URL publik video pendek (Vercel Blob `videos/{user.id}/{uuid}.ext`) —
+   * Fase 6, Pasca-MVP 15 (kolom posts.video_url, migrasi 0011). Null = post
+   * tanpa video; hanya diisi saat pembuatan post (tanpa grant update, video
+   * tidak bisa diganti setelahnya). Baca longgar di components/feed/types.
+   */
+  video_url: string | null;
 }
 
 /** Komentar dari view comments_view (PRD 16.7) untuk satu post. */
@@ -139,6 +152,16 @@ export interface CreatePostInput {
    * Bukan URL, bukan base64: file SUDAH diunggah klien sebelum createPost.
    */
   images?: string[];
+  /**
+   * URL publik video pendek hasil uploadVideo (Fase 6, Pasca-MVP 15) —
+   * opsional, HANYA dari Vercel Blob di folder milik sendiri
+   * (`https://*.public.blob.vercelstorage.com/videos/{user.id}/{uuid}.ext`).
+   * Disimpan sekali saat pembuatan post (kolom posts.video_url); video tidak
+   * bisa diedit setelahnya (tanpa grant update video_url, migrasi 0011).
+   * Foto dan video saling eksklusif di UI — server tidak memaksa, tapi
+   * kombinasi keduanya tidak diwajibkan didukung tampilan kartu.
+   */
+  videoUrl?: string;
 }
 
 export interface EditPostInput {
@@ -180,6 +203,8 @@ interface PostFeedRow {
   author_avatar: string | null;
   is_mine: boolean;
   my_vote: number | null;
+  /** URL video pendek (Fase 6, migrasi 0011) — null bila post tanpa video. */
+  video_url: string | null;
 }
 
 /** Baris mentah view comments_view sebelum my_vote dipertipakan. */
@@ -571,6 +596,26 @@ export async function createPost(
       }
     }
 
+    // Validasi video (Fase 6, Pasca-MVP 15): URL harus publik dari Vercel
+    // Blob DAN berada di folder milik pengguna sendiri (uploadVideo menyimpan
+    // di `videos/{user.id}/{uuid}.ext`) — selaras grant kolom insert 0011.
+    // Divalidasi SEBELUM post dibuat; video_url TIDAK bisa diubah setelahnya
+    // (tanpa grant update).
+    let videoUrl: string | null = null;
+    const urlVideoMentah = (input.videoUrl ?? "").trim();
+    if (urlVideoMentah) {
+      const sah =
+        urlVideoMentah.includes(".public.blob.vercelstorage.com") &&
+        urlVideoMentah.includes(`videos/${user.id}/`);
+      if (!sah) {
+        console.warn(
+          `createPost: tolak videoUrl bukan milik sendiri / bukan Vercel Blob — ${JSON.stringify(urlVideoMentah.slice(0, 120))}`,
+        );
+        return failure(appError("VIDEO_INVALID"));
+      }
+      videoUrl = urlVideoMentah;
+    }
+
     const supabase = await createClient();
 
     // Resolusi + verifikasi komunitas (tabel communities boleh dibaca).
@@ -606,7 +651,8 @@ export async function createPost(
     }
 
     // Rate limit (PRD 16.4) dan status akun dijaga trigger + RLS di DB —
-    // error RATE_LIMIT / RLS_DENIED dipetakan extractErrorCode.
+    // error RATE_LIMIT / RLS_DENIED dipetakan extractErrorCode. video_url
+    // hanya ditulis saat insert (grant kolom 0011; tanpa grant update).
     const { data, error } = await supabase
       .from("posts")
       .insert({
@@ -615,6 +661,7 @@ export async function createPost(
         title,
         body: body === "" ? null : body,
         is_anonymous: input.isAnonymous === true,
+        video_url: videoUrl,
       })
       .select("id")
       .single();

@@ -10,6 +10,7 @@
   "dependencies": {
     "@supabase/ssr": "^0.7",
     "@supabase/supabase-js": "^2",
+    "@vercel/blob": "^1.1.1",
     "autoprefixer": "^10",
     "browser-image-compression": "^2.0.2",
     "next": "^15.5.4",

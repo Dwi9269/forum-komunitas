@@ -16,8 +16,9 @@ export const metadata = {
 
 /**
  * Detail post /p/[id] (PRD 6, wireframe PRD 22.2): judul, penulis + waktu
- * relatif + label (diedit), isi lengkap (teks biasa), galeri foto (maks 4,
- * klik untuk perbesar — Fase 4), vote (optimistic), menu titik tiga
+ * relatif + label (diedit), isi lengkap (teks biasa), video pendek bila ada
+ * (Fase 6, Pasca-MVP 15 — <video controls> tanpa autoplay), galeri foto
+ * (maks 4, klik untuk perbesar — Fase 4), vote (optimistic), menu titik tiga
  * (Lapor / Hapus bila milik sendiri), form komentar, dan komentar
  * bertingkat dengan vote + menu masing-masing.
  */
@@ -118,6 +119,18 @@ export default async function DetailPostPage({
           <p className="mt-3 whitespace-pre-wrap break-words text-base leading-relaxed text-foreground">
             {post.content}
           </p>
+        )}
+        {/* Video pendek post (Fase 6, Pasca-MVP 15): pemutar di bawah isi;
+            TANPA autoplay — pengguna yang memutar (PRD 15, 1 video per post). */}
+        {post.videoUrl && (
+          <video
+            controls
+            preload="metadata"
+            src={post.videoUrl}
+            className="mt-3 w-full rounded-lg border border-border"
+          >
+            Browser kamu tidak mendukung pemutar video.
+          </video>
         )}
         {/* Galeri foto post (maks 4 — PRD 18.3.5); klik untuk perbesar. */}
         {post.images.length > 0 && (

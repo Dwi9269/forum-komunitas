@@ -7,10 +7,13 @@ import Input from "@/components/ui/Input";
 import Spinner from "@/components/ui/Spinner";
 import Textarea from "@/components/ui/Textarea";
 import ImagePicker from "@/components/ImagePicker";
+import VideoPicker from "@/components/VideoPicker";
 import { createPost } from "@/lib/actions/posts";
 import { getCommunities } from "@/lib/actions/communities";
+import { hapusVideo, uploadVideo } from "@/lib/actions/media";
 import { deletePostImage, uploadPostImage } from "@/lib/image/upload";
 import { isFotoError } from "@/lib/image/compress";
+import { isVideoError, kompresVideo } from "@/lib/image/video";
 import { extractErrorCode } from "@/lib/errors";
 import {
   bacaIdDariHasil,
@@ -34,6 +37,17 @@ import {
  *   - createPost gagal setelah upload sukses → file yatim di-rollback lewat
  *     deletePostImage (PRD 20 kasus tepi 3 / 25.4), foto perlu diunggah ulang.
  *   - Akun < 24 jam ditolak storage (PRD 18.3.10) → pesan jelas tampil inline.
+ * - VIDEO (Fase 6, Pasca-MVP 15, PRD bagian 15): VideoPicker SATU video
+ *   opsional; foto dan video saling EKSKLUSIF (ada video → foto
+ *   dinonaktifkan, dan sebaliknya — catatan kecil tampil di form).
+ *   Alur kirim video: kompresVideo (klien, canvas 480p + MediaRecorder) →
+ *   uploadVideo (server action ke Vercel Blob) → createPost({ videoUrl }).
+ *   - Progres tampil: "Mengompres video..." → "Mengunggah video..." →
+ *     "Menyimpan post...".
+ *   - Kompres/upload video gagal → error inline + tombol "Kirim tanpa video"
+ *     (video dibuang, post tetap bisa dikirim).
+ *   - createPost gagal setelah video terunggah → hapusVideo (rollback, pola
+ *     PRD 25.4).
  * - Sukses → diarahkan ke halaman detail post (PRD 18.3.1).
  */
 
@@ -71,6 +85,19 @@ function pesanGagalFoto(error: unknown): string {
   return extractErrorCode(error).message;
 }
 
+/** Pesan ramah untuk error alur video (tanpa detail teknis). */
+function pesanGagalVideo(error: unknown): string {
+  if (isVideoError(error)) return error.message;
+  return extractErrorCode(error).message;
+}
+
+/** Baca data.url dari hasil uploadVideo (kontrak ActionResult, longgar). */
+function bacaUrlVideo(hasil: unknown): string | null {
+  const rekam = hasil as { data?: { url?: unknown } } | null;
+  const url = rekam?.data?.url;
+  return typeof url === "string" && url ? url : null;
+}
+
 /** Kode yang menandakan storage menolak upload (policy akun < 24 jam). */
 function ditolakStorage(error: unknown): boolean {
   const kode = (error as { code?: unknown } | null)?.code;
@@ -97,21 +124,31 @@ export default function SubmitPostForm({
   const [files, setFiles] = useState<File[]>([]);
   const [paths, setPaths] = useState<(string | null)[]>([]);
 
+  // Video (Fase 6, Pasca-MVP 15): SATU video opsional. Foto dan video saling
+  // eksklusif — memilih salah satu menonaktifkan/membersihkan yang lain.
+  const [videoFile, setVideoFile] = useState<File | null>(null);
+
   const [errorForm, setErrorForm] = useState<string | null>(null);
   const [errorKomunitas, setErrorKomunitas] = useState<string | null>(null);
   const [errorJudul, setErrorJudul] = useState<string | null>(null);
   const [errorIsi, setErrorIsi] = useState<string | null>(null);
   const [errorFoto, setErrorFoto] = useState<string | null>(null);
+  const [errorVideo, setErrorVideo] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
   const nonaktif = Boolean(alasanNonaktif);
   const fotoNonaktif = nonaktif || Boolean(alasanFotoNonaktif);
+  // Eksklusivitas foto vs video: ada video → foto tak bisa dipilih, dan
+  // sebaliknya (keputusan Fase 6 — PRD 4.3 belum mendefinisikan gabungan).
+  const fotoTerblokirVideo = videoFile !== null;
+  const videoTerblokirFoto = files.length > 0;
   // PRD 18.3.2: judul kosong → tombol Kirim nonaktif.
   const kirimNonaktif =
     nonaktif || pending || judul.trim().length === 0 || komunitas === "";
 
-  /** Ganti daftar foto; path lama tetap dipakai untuk file yang sama. */
+  /** Ganti daftar foto; path lama tetap dipakai untuk file yang sama. Ada
+   *  foto → video opsional dibuang (saling eksklusif). */
   function gantiFiles(berikut: File[]) {
     setFiles(berikut);
     setPaths(
@@ -120,6 +157,21 @@ export default function SubmitPostForm({
         return indeks >= 0 ? (paths[indeks] ?? null) : null;
       }),
     );
+    if (berikut.length > 0) {
+      setVideoFile(null);
+      setErrorVideo(null);
+    }
+  }
+
+  /** Ganti video opsional; ada video → daftar foto dibersihkan. */
+  function gantiVideo(file: File | null) {
+    setVideoFile(file);
+    if (file) {
+      setFiles([]);
+      setPaths([]);
+      setErrorFoto(null);
+    }
+    setErrorVideo(null);
   }
 
   /** Coba muat ulang daftar komunitas dari klien (server action). */
@@ -150,8 +202,22 @@ export default function SubmitPostForm({
     );
   }
 
+  /** Rollback video terunggah bila createPost gagal (pola PRD 25.4, Fase 6). */
+  async function batalkanVideo(url: string | null) {
+    if (!url) return;
+    await Promise.allSettled([hapusVideo(url)]);
+  }
+
   function kirim(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    kirimPost(false);
+  }
+
+  /**
+   * Validasi lalu kirim post. `abaikanVideo = true` dipakai tombol
+   * "Kirim tanpa video" setelah video gagal dikompres/diunggah.
+   */
+  function kirimPost(abaikanVideo: boolean) {
     const judulBersih = judul.trim(); // trim sebelum validasi (PRD 20.8)
     const isiBersih = isi.trim();
 
@@ -188,9 +254,46 @@ export default function SubmitPostForm({
       // Pelacak unggahan untuk rollback bila langkah setelahnya gagal
       // (PRD 20 kasus tepi 3 / 25.4).
       let unggahan: (string | null)[] = paths;
+      let videoTerunggah: string | null = null;
       try {
-        // 1) Unggah foto yang belum punya path (retry hanya foto gagal —
+        // 1) VIDEO (Fase 6, Pasca-MVP 15) — kompres di klien lalu upload ke
+        //    Vercel Blob; URL dikirim ke createPost (pola PRD 25.4).
+        let videoUrl: string | undefined;
+        const videoAktif = abaikanVideo ? null : videoFile;
+        if (videoAktif) {
+          setStatus("Mengompres video...");
+          let videoHasil: File;
+          try {
+            videoHasil = await kompresVideo(videoAktif);
+          } catch (err) {
+            setErrorVideo(
+              `Gagal mengompres video: ${pesanGagalVideo(err)} Coba kirim lagi, atau kirim tanpa video di bawah.`,
+            );
+            setStatus(null);
+            return;
+          }
+          setStatus("Mengunggah video...");
+          const formData = new FormData();
+          formData.append("file", videoHasil);
+          const hasilVideo: unknown = await uploadVideo(formData);
+          const urlVideo = bacaUrlVideo(hasilVideo);
+          if (!urlVideo) {
+            // ActionResult gagal { ok:false, code, message } (mis. token Blob
+            // belum terpasang, ukuran > 8 MB setelah kompres) atau bentuk
+            // tak terduga — tampilkan pesan ramah + opsi kirim tanpa video.
+            setErrorVideo(
+              `${pesanGagalHasil(hasilVideo) ?? "Gagal mengunggah video."} Kamu bisa kirim tanpa video di bawah.`,
+            );
+            setStatus(null);
+            return;
+          }
+          videoTerunggah = urlVideo; // dicatat untuk rollback
+          videoUrl = urlVideo;
+        }
+
+        // 2) Unggah foto yang belum punya path (retry hanya foto gagal —
         //    PRD 18.3.4). Kompres + upload dalam satu panggilan per foto.
+        //    (Foto dan video saling eksklusif — keduanya tak pernah bersama.)
         const pathsBaru = [...paths];
         for (let i = 0; i < files.length; i += 1) {
           if (pathsBaru[i]) continue;
@@ -219,7 +322,8 @@ export default function SubmitPostForm({
         setPaths(pathsBaru);
         unggahan = pathsBaru;
 
-        // 2) Simpan post dengan path foto (bukan URL) — PRD 25.3.
+        // 3) Simpan post dengan path foto (bukan URL) — PRD 25.3 — dan
+        //    videoUrl bila ada (Pasca-MVP 15; kolom posts.video_url).
         setStatus("Menyimpan post...");
         const gambar = pathsBaru.filter((path): path is string =>
           Boolean(path),
@@ -230,13 +334,15 @@ export default function SubmitPostForm({
           body: isiBersih,
           isAnonymous: anonim,
           images: gambar,
+          videoUrl,
         };
         const hasil: unknown = await createPost(argumen);
         const gagal = pesanGagalHasil(hasil);
         if (gagal) {
           // Upload sukses tetapi simpan post gagal → hapus file yatim
-          // (PRD 20 kasus tepi 3); foto diunggah ulang saat retry.
+          // (PRD 20 kasus tepi 3); foto/video diunggah ulang saat retry.
           await batalkanUnggahan(pathsBaru);
+          await batalkanVideo(videoTerunggah);
           setPaths(pathsBaru.map(() => null));
           setErrorForm(gagal);
           setStatus(null);
@@ -248,9 +354,10 @@ export default function SubmitPostForm({
         router.replace(id ? `/p/${encodeURIComponent(id)}` : "/");
         router.refresh();
       } catch (err) {
-        // createPost melempar (mis. jaringan) setelah foto terunggah →
-        // rollback file yatim; foto diunggah ulang saat dicoba lagi.
+        // createPost melempar (mis. jaringan) setelah foto/video terunggah →
+        // rollback file yatim; diunggah ulang saat dicoba lagi.
         await batalkanUnggahan(unggahan);
+        await batalkanVideo(videoTerunggah);
         setPaths(unggahan.map(() => null));
         setErrorForm(extractErrorCode(err).message);
         setStatus(null);
@@ -376,7 +483,8 @@ export default function SubmitPostForm({
       </div>
 
       {/* Foto (maks 4 — PRD 18.3.5 / 18.7 / 25): pratinjau + hapus per foto
-          ditangani ImagePicker; kompres + upload terjadi saat Kirim. */}
+          ditangani ImagePicker; kompres + upload terjadi saat Kirim.
+          Nonaktif bila video terpilih (foto vs video saling eksklusif). */}
       <div className="flex flex-col gap-2">
         <span className="text-sm font-medium text-foreground">
           Foto{" "}
@@ -396,7 +504,7 @@ export default function SubmitPostForm({
             files={files}
             onChange={gantiFiles}
             max={FOTO_MAKS}
-            disabled={nonaktif || pending}
+            disabled={nonaktif || pending || fotoTerblokirVideo}
           />
         )}
         <p className="text-xs leading-relaxed text-muted-foreground">
@@ -408,16 +516,58 @@ export default function SubmitPostForm({
             {errorFoto}
           </p>
         )}
-        {status && (
-          <p
-            aria-live="polite"
-            className="flex items-center gap-2 text-sm text-muted-foreground"
-          >
-            <Spinner size="sm" label={status} />
-            {status}
+      </div>
+
+      {/* Video (Pasca-MVP 15, Fase 6): SATU video opsional 30-60 detik,
+          dikompres di klien saat Kirim (kompresVideo → uploadVideo →
+          createPost). Saling eksklusif dengan foto. */}
+      <div className="flex flex-col gap-2">
+        <span className="text-sm font-medium text-foreground">
+          Video{" "}
+          <span className="font-normal text-muted-foreground">
+            (opsional, maks 1)
+          </span>
+        </span>
+        <VideoPicker
+          file={videoFile}
+          onChange={gantiVideo}
+          disabled={nonaktif || pending || videoTerblokirFoto}
+        />
+        {(fotoTerblokirVideo || videoTerblokirFoto) && (
+          <p className="text-xs leading-relaxed text-warning">
+            Foto dan video tidak bisa digabung dalam satu post — pilih salah
+            satu.
           </p>
         )}
+        {errorVideo && (
+          <p role="alert" className="text-sm leading-relaxed text-danger">
+            {errorVideo}
+          </p>
+        )}
+        {errorVideo && videoFile && !pending && (
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => kirimPost(true)}
+            className="self-start"
+          >
+            Kirim tanpa video
+          </Button>
+        )}
       </div>
+
+      {/* Progres kirim (dipakai alur foto & video): "Mengompres video..." →
+          "Mengunggah video..." → "Menyimpan post..."; aria-live agar pembaca
+          layar mendengar perubahan status. */}
+      {status && (
+        <p
+          aria-live="polite"
+          className="flex items-center gap-2 text-sm text-muted-foreground"
+        >
+          <Spinner size="sm" label={status} />
+          {status}
+        </p>
+      )}
 
       {/* Anonim (PRD 4.3: hanya untuk post, bukan komentar) */}
       <label className="flex items-start gap-2.5 text-sm text-foreground">

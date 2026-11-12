@@ -60,6 +60,12 @@ export type ErrorCode =
   | "COMMUNITY_SLUG_TAKEN" // slug komunitas sudah dipakai (unique)
   | "INVITE_INPUT_INVALID" // max_uses/expires_at kode undangan tidak valid
   | "REGISTRATION_REJECTED" // signUp ditolak trigger tapi pesannya disamarkan GoTrue
+  // Kode alur video (Pasca-MVP 15, MEDIA-AGENT): video pendek dikompres di
+  // klien lalu diunggah ke Vercel Blob lewat lib/actions/media.ts.
+  | "VIDEO_TOO_LARGE" // video terlalu besar setelah dikompres (> 8 MB server)
+  | "VIDEO_DURATION" // durasi video melebihi 60 detik
+  | "VIDEO_INVALID" // format video tidak didukung / URL video tidak sah
+  | "BLOB_UNAVAILABLE" // Vercel Blob belum terhubung (env token hilang)
   | "UNKNOWN"; // fallback
 
 export const ERROR_MESSAGES: Record<ErrorCode, string> = {
@@ -104,6 +110,10 @@ export const ERROR_MESSAGES: Record<ErrorCode, string> = {
   COMMUNITY_INVALID: "Slug atau nama komunitas tidak valid.",
   COMMUNITY_SLUG_TAKEN: "Slug komunitas sudah dipakai. Pilih slug lain.",
   INVITE_INPUT_INVALID: "Data kode undangan tidak valid.",
+  VIDEO_TOO_LARGE: "Video terlalu besar setelah dikompres.",
+  VIDEO_DURATION: "Video maksimal 60 detik.",
+  VIDEO_INVALID: "Format video tidak didukung.",
+  BLOB_UNAVAILABLE: "Penyimpanan video belum terhubung.",
   UNKNOWN: "Terjadi kesalahan. Coba lagi.",
 };
 

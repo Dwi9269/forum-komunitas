@@ -12,6 +12,8 @@
  *   - Fase 4: `images` (URL foto post, fallback []) dibaca; komentar diperkaya
  *     `isMine` + `myVote` (vote komentar) dan daftar datar comments_view
  *     (parent_id) disusun jadi pohon di klien (PRD 24 getComments).
+ *   - Fase 6: `videoUrl`/`video_url` (URL video pendek Pasca-MVP 15, null =
+ *     tanpa video) dibaca di FeedPostView dan PostDetailView.
  */
 
 type Rekam = Record<string, unknown>;
@@ -91,6 +93,11 @@ export interface FeedPostView {
   isMine: boolean;
   /** URL publik foto post (maks 4, urut position — Fase 4). Kosong = tanpa foto. */
   images: string[];
+  /**
+   * URL publik video pendek (Fase 6, Pasca-MVP 15 — posts_feed.video_url).
+   * null = post tanpa video; video hanya diisi saat pembuatan post.
+   */
+  videoUrl: string | null;
 }
 
 function bacaKomunitas(raw: unknown): { slug: string | null; name: string | null } {
@@ -156,6 +163,8 @@ export function toFeedPostView(raw: unknown): FeedPostView {
     myVote: jepitVote(asAngka(baca(raw, ["myVote", "my_vote"]))),
     isMine: baca(raw, ["isMine", "is_mine"]) === true,
     images: bacaDaftarTeks(baca(raw, ["images", "foto", "postImages", "post_images"])),
+    // Fase 6: video_url (snake_case dari posts_feed) / videoUrl (camelCase).
+    videoUrl: asTeks(baca(raw, ["videoUrl", "video_url"])),
   };
 }
 
@@ -234,6 +243,11 @@ export interface PostDetailView {
   isMine: boolean;
   /** URL publik foto post (maks 4, urut position — Fase 4). Kosong = tanpa foto. */
   images: string[];
+  /**
+   * URL publik video pendek (Fase 6, Pasca-MVP 15 — posts_feed.video_url).
+   * null = post tanpa video; tampil sebagai pemutar <video> di detail.
+   */
+  videoUrl: string | null;
 }
 
 export function toPostView(raw: unknown): PostDetailView {
@@ -256,6 +270,8 @@ export function toPostView(raw: unknown): PostDetailView {
     myVote: jepitVote(asAngka(baca(raw, ["myVote", "my_vote"]))),
     isMine: baca(raw, ["isMine", "is_mine"]) === true,
     images: bacaDaftarTeks(baca(raw, ["images", "foto", "postImages", "post_images"])),
+    // Fase 6: video_url (snake_case dari posts_feed) / videoUrl (camelCase).
+    videoUrl: asTeks(baca(raw, ["videoUrl", "video_url"])),
   };
 }
 
