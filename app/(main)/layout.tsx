@@ -4,6 +4,7 @@ import { logout } from "@/lib/actions/auth";
 import { getUnreadCount } from "@/lib/actions/notifications";
 import AccountStatusBanner from "@/components/AccountStatusBanner";
 import Avatar from "@/components/ui/Avatar";
+import NotificationBell from "@/components/NotificationBell";
 import BottomNav from "@/components/feed/BottomNav";
 import PwaRegister from "@/components/PwaRegister";
 import { ambilDaftarKomunitas, ambilSesi } from "@/components/feed/server-data";
@@ -33,24 +34,8 @@ function IkonBuat() {
   );
 }
 
-/** Ikon lonceng notifikasi (SVG inline, tanpa dependensi). */
-function IkonLonceng() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="h-5 w-5"
-      aria-hidden="true"
-    >
-      <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
-      <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
-    </svg>
-  );
-}
+// Ikon lonceng notifikasi dipindah ke components/NotificationBell.tsx
+// (komponen klien — badge realtime Fase 6).
 
 /**
  * Layout inti forum (route group "(main)"): header (logo teks, nav komunitas
@@ -79,8 +64,9 @@ export default async function MainLayout({
       ? sesi.status
       : null;
 
-  // Badge notifikasi (Pasca-MVP 15): angka belum dibaca HANYA bila sesi ada.
-  // Layout force-dynamic → badge terhitung ulang di setiap navigasi. Kegagalan
+  // Angka awal badge notifikasi (Pasca-MVP 15): HANYA bila sesi ada; dikirim
+  // ke NotificationBell (komponen klien — badge update realtime, Fase 6).
+  // Layout force-dynamic → dihitung ulang di setiap render server. Kegagalan
   // (env/RLS/jaringan) dianggap 0 agar header tidak pernah rusak.
   let unread = 0;
   if (sesi) {
@@ -122,26 +108,11 @@ export default async function MainLayout({
           </Link>
 
           <div className="flex items-center gap-2">
-            {/* Ikon lonceng notifikasi (Pasca-MVP 15) — hanya bila sesi ada;
-                badge angka belum dibaca dihitung di server tiap navigasi. */}
-            {sesi && (
-              <Link
-                href="/notifikasi"
-                aria-label={
-                  unread > 0
-                    ? `Notifikasi — ${unread} belum dibaca`
-                    : "Notifikasi"
-                }
-                className="relative inline-flex h-9 w-9 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <IkonLonceng />
-                {unread > 0 && (
-                  <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[10px] font-semibold text-white">
-                    {unread > 9 ? "9+" : unread}
-                  </span>
-                )}
-              </Link>
-            )}
+            {/* Lonceng notifikasi (Pasca-MVP 15) — komponen klien Fase 6:
+                badge update realtime via postgres_changes; angka awal tetap
+                dihitung server (unread di atas). Tamu (sesi null → userId
+                null) → komponen merender null, lonceng hilang seperti dulu. */}
+            <NotificationBell userId={sesi?.id ?? null} initialUnread={unread} />
 
             {/* Tombol "+ Buat Post" (wireframe 22.1 / PRD 6) */}
             <Link
