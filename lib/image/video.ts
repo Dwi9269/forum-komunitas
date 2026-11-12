@@ -27,6 +27,13 @@
 /** Ukuran file video mentah maksimal sebelum diproses (30 MB). */
 export const VIDEO_RAW_MAX_BYTES = 30 * 1024 * 1024;
 
+/**
+ * Batas ukuran file untuk upload TANPA kompres (harus ≤ batas server 8 MB).
+ * Bila kompres gagal di perangkat (sering di browser HP) dan video asli masih
+ * muat, video asli diunggah langsung sebagai fallback.
+ */
+export const VIDEO_UPLOAD_MAKS_BYTES = 8 * 1024 * 1024;
+
 /** Durasi maksimum yang diproses (61 detik — PRD 15: video 30-60 detik). */
 export const VIDEO_DURASI_MAKS_DETIK = 61;
 
@@ -141,13 +148,20 @@ function bacaDurasi(video: HTMLVideoElement): Promise<number | null> {
 }
 
 /**
- * Kompres satu file video pendek: validasi tipe/ukuran/durasi lalu rekam
- * ulang lewat canvas 480p + MediaRecorder 400 kbps.
+ * Kompres satu file video pendek.
+ *
+ * Urutan percobaan (audit pasca-rilis: kompres canvas sering GAGAL di browser
+ * HP karena elemen video/canvas tidak dirender bila tidak dipasang ke DOM):
+ *  1. Kompres inti: canvas 480p + MediaRecorder 400 kbps — video & kanvas
+ *     dipasang ke DOM (tersembunyi di luar layar) agar frame benar-benar
+ *     didekode di browser HP.
+ *  2. FALLBACK: kompres gagal dengan cara apa pun dan video asli ≤ 8 MB
+ *     (batas upload server) → video ASLI diunggah tanpa kompres. Post tetap
+ *     tayang; hanya ukurannya yang tidak dioptimalkan.
  *
  * Melempar VideoError berkode:
- * - VIDEO_INVALID   — bukan video/*, browser tanpa MediaRecorder/captureStream,
- *                     video gagal didekode, atau hasil perekaman kosong.
- * - VIDEO_TOO_LARGE — file mentah > 30 MB.
+ * - VIDEO_INVALID   — bukan video/*.
+ * - VIDEO_TOO_LARGE — file mentah > 30 MB, atau > 8 MB dan kompres gagal.
  * - VIDEO_DURATION  — durasi metadata > 61 detik.
  */
 export async function kompresVideo(file: File): Promise<File> {
@@ -164,7 +178,28 @@ export async function kompresVideo(file: File): Promise<File> {
     throw videoError("VIDEO_TOO_LARGE");
   }
 
-  // --- 2) Dukungan browser ---
+  // --- 2) Coba kompres inti; gagal → fallback video asli bila muat ---
+  try {
+    return await cobaKompresInti(file, tipe);
+  } catch (error) {
+    // VIDEO_DURATION harus tetap ditolak (bukan masalah kompresi).
+    if (isVideoError(error) && error.code === "VIDEO_DURATION") {
+      throw error;
+    }
+    if (file.size <= VIDEO_UPLOAD_MAKS_BYTES) {
+      // Fallback tanpa kompres — post tetap tayang dengan video asli.
+      return file;
+    }
+    throw videoError(
+      "VIDEO_TOO_LARGE",
+      "Video terlalu besar dan gagal dikompres di perangkat ini. Coba video maksimal 60 detik dengan resolusi lebih rendah, atau gunakan aplikasi kamera dengan resolusi 720p.",
+    );
+  }
+}
+
+/** Kompres inti: canvas 480p + MediaRecorder 400 kbps. */
+async function cobaKompresInti(file: File, tipe: string): Promise<File> {
+  // --- Dukungan browser ---
   const dukunganCanvas =
     typeof HTMLCanvasElement !== "undefined" &&
     typeof HTMLCanvasElement.prototype.captureStream === "function";
@@ -177,12 +212,18 @@ export async function kompresVideo(file: File): Promise<File> {
   }
 
   // --- 3) Siapkan elemen video tersembunyi + URL sementara ---
+  // WAJIB dipasang ke DOM (tersembunyi di luar layar, bukan display:none):
+  // di Chrome Android, video off-DOM tidak mendekode frame → rekaman kosong.
   const urlSumber = URL.createObjectURL(file);
   const video = document.createElement("video");
   video.muted = true; // tanpa keluaran audio + autoplay tidak diblokir
   video.playsInline = true;
   video.preload = "metadata";
   video.src = urlSumber;
+  video.style.cssText =
+    "position:fixed;left:-9999px;top:0;width:480px;opacity:0;pointer-events:none;";
+  document.body.append(video);
+  let canvas: HTMLCanvasElement | null = null;
 
   try {
     const durasi = await bacaDurasi(video);
@@ -216,9 +257,11 @@ export async function kompresVideo(file: File): Promise<File> {
         : Math.round(lebar * (9 / 16));
     const tinggi = Math.max(2, tinggiAsli - (tinggiAsli % 2)); // genap (encoder)
 
-    const canvas = document.createElement("canvas");
+    canvas = document.createElement("canvas");
     canvas.width = lebar;
     canvas.height = tinggi;
+    canvas.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0;";
+    document.body.append(canvas);
     const ctx = canvas.getContext("2d");
     if (!ctx) {
       throw videoError("VIDEO_INVALID", "Browser tidak mendukung rekaman video.");
@@ -296,9 +339,10 @@ export async function kompresVideo(file: File): Promise<File> {
     const namaDasar = file.name.replace(/\.[^./\\]+$/, "") || "video";
     return new File([hasil], `${namaDasar}.${ekstensi}`, { type: mimeType });
   } finally {
-    // Bersih-bersih wajib: URL sementara + elemen video (PRD 25.6.2 pola).
+    // Bersih-bersih wajib: URL sementara + elemen video/canvas dari DOM
+    // (PRD 25.6.2 pola).
     URL.revokeObjectURL(urlSumber);
-    video.removeAttribute("src");
-    video.load();
+    video.remove();
+    canvas?.remove();
   }
 }
