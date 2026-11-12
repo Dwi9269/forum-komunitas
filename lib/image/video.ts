@@ -16,9 +16,9 @@
  *     Perekaman berhenti saat video selesai / maksimum 61 detik.
  *  5. Hasil: File baru (webm/mp4) ukuran jauh lebih kecil, siap uploadVideo.
  *
- * Batasan (keputusan Fase 6): MediaRecorder pada captureStream canvas HANYA
- * merekam gambar — audio asli tidak dibawa ke hasil kompres. Video pendek
- * forum dipakai tanpa suara (lihat docs/handoff/FASE6-VIDEO.md).
+ * Suara (revisi pasca-audit): audio asli video DIBAWA ke hasil kompres via
+ * Web Audio (MediaElementSource → MediaStreamDestination) TANPA keluar ke
+ * speaker. Bila audio gagal dibuat, rekaman lanjut tanpa suara (fallback).
  *
  * Error dilempar sebagai `Error` dengan properti `code` berkode VIDEO_*
  * (terdaftar di lib/errors.ts); message sudah ramah bahasa Indonesia.
@@ -48,8 +48,9 @@ const VIDEO_LEBAR_KANVAS = 480;
 
 /** Prioritas mimeType perekaman: VP9 -> VP8 -> MP4 (PRD keputusan Fase 6). */
 const MIME_PRIORITAS = [
-  "video/webm;codecs=vp9",
-  "video/webm;codecs=vp8",
+  "video/webm;codecs=vp9,opus",
+  "video/webm;codecs=vp8,opus",
+  "video/webm",
   "video/mp4",
 ] as const;
 
@@ -216,7 +217,9 @@ async function cobaKompresInti(file: File, tipe: string): Promise<File> {
   // di Chrome Android, video off-DOM tidak mendekode frame → rekaman kosong.
   const urlSumber = URL.createObjectURL(file);
   const video = document.createElement("video");
-  video.muted = true; // tanpa keluaran audio + autoplay tidak diblokir
+  video.muted = true; // sementara — dibuka penuh saat perekaman dimulai
+  let audioCtx: AudioContext | null = null;
+  let audioTrack: MediaStreamTrack | null = null;
   video.playsInline = true;
   video.preload = "metadata";
   video.src = urlSumber;
@@ -249,6 +252,21 @@ async function cobaKompresInti(file: File, tipe: string): Promise<File> {
       video.load();
     });
 
+    // Suara (revisi pasca-audit): alihkan audio video ke MediaStreamDestination
+    // — audio masuk rekaman TAPI tidak keluar ke speaker. Gagal → rekam tanpa
+    // suara (fallback diam-diam).
+    try {
+      audioCtx = new AudioContext();
+      await audioCtx.resume();
+      const sumberAudio = audioCtx.createMediaElementSource(video);
+      const tujuanAudio = audioCtx.createMediaStreamDestination();
+      sumberAudio.connect(tujuanAudio);
+      audioTrack = tujuanAudio.stream.getAudioTracks()[0] ?? null;
+    } catch {
+      audioCtx = null;
+      audioTrack = null;
+    }
+
     // --- 4) Kanvas 480p (lebar 480, tinggi proporsional) + perekaman ---
     const lebar = VIDEO_LEBAR_KANVAS;
     const tinggiAsli =
@@ -267,7 +285,11 @@ async function cobaKompresInti(file: File, tipe: string): Promise<File> {
       throw videoError("VIDEO_INVALID", "Browser tidak mendukung rekaman video.");
     }
 
-    const stream = canvas.captureStream(VIDEO_FPS);
+    video.muted = false; // audio kini lewat graph Web Audio — tak keluar ke speaker
+    const streamKanvas = canvas.captureStream(VIDEO_FPS);
+    const jalur: MediaStreamTrack[] = [...streamKanvas.getVideoTracks()];
+    if (audioTrack) jalur.push(audioTrack);
+    const stream = new MediaStream(jalur);
     const recorder = new MediaRecorder(stream, {
       mimeType,
       videoBitsPerSecond: VIDEO_BITRATE,
@@ -340,9 +362,14 @@ async function cobaKompresInti(file: File, tipe: string): Promise<File> {
     return new File([hasil], `${namaDasar}.${ekstensi}`, { type: mimeType });
   } finally {
     // Bersih-bersih wajib: URL sementara + elemen video/canvas dari DOM
-    // (PRD 25.6.2 pola).
+    // (PRD 25.6.2 pola) + tutup AudioContext uji.
     URL.revokeObjectURL(urlSumber);
     video.remove();
     canvas?.remove();
+    try {
+      await audioCtx?.close();
+    } catch {
+      // abaikan — AudioContext mungkin belum pernah jalan
+    }
   }
 }
