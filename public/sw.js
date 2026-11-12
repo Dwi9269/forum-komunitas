@@ -11,11 +11,14 @@
  *     * RSC prefetch (?_rsc) dan /_next/image               -> tidak masuk daftar.
  * - Navigasi dokumen: network-first; gagal jaringan -> /offline.html dari cache.
  *   Halaman TIDAK di-cache (semua rute force-dynamic & per-pengguna).
- * - Cache-first HANYA untuk aset statis immutable: /_next/static/* (filename
- *   content-hashed) dan /icon.svg.
+ * - Aset statis: **network-first** (fallback cache saat offline). Mengapa bukan
+ *   cache-first? Chunk /_next/static di-cache-first akan menyajikan JavaScript
+ *   LAMA selamanya ke pengguna lama saat ada deploy baru (kasus nyata: fitur
+ *   realtime tidak pernah sampai ke tab yang sudah terbuka). Network-first
+ *   memastikan deploy baru selalu sampai; offline tetap tersaji dari cache.
  */
 
-const CACHE_NAME = "forum-komunitas-v1";
+const CACHE_NAME = "forum-komunitas-v2";
 const PRECACHE_URLS = ["/", "/offline.html"];
 
 self.addEventListener("install", (event) => {
@@ -75,12 +78,14 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Aset statis immutable -> cache-first.
+  // Aset statis -> network-first (fallback cache saat offline). Lihat
+  // komentar header: cache-first membuat deploy baru tidak pernah sampai
+  // ke pengguna lama.
   if (
     url.pathname.startsWith("/_next/static/") ||
     url.pathname === "/icon.svg"
   ) {
-    event.respondWith(asetCacheFirst(request));
+    event.respondWith(asetNetworkFirst(request));
     return;
   }
 
@@ -104,10 +109,8 @@ async function navigasiNetworkFirst(request) {
   }
 }
 
-async function asetCacheFirst(request) {
+async function asetNetworkFirst(request) {
   const cache = await caches.open(CACHE_NAME);
-  const tersimpan = await cache.match(request);
-  if (tersimpan) return tersimpan;
   try {
     const response = await fetch(request);
     // Hanya cache respons same-origin ("basic") yang sukses.
@@ -116,6 +119,8 @@ async function asetCacheFirst(request) {
     }
     return response;
   } catch {
+    const tersimpan = await cache.match(request);
+    if (tersimpan) return tersimpan;
     return new Response("", { status: 504, statusText: "Offline" });
   }
 }
